@@ -384,3 +384,52 @@ export interface SimStore {
   locate(id: string): boolean
   emit(severity: Severity, channel: EventChannel, message: string, sector?: SectorId, entityId?: string): void
 }
+
+/* ── engine extensions (ADDITIVE ONLY — declaration merging) ───────── */
+
+/** Static camera placement produced by cityGen; entities.ts instantiates Camera entities from these. */
+export interface CameraSpec {
+  id: string
+  pos: Vec2
+  sector: SectorId
+  /** facing, radians */
+  dir: number
+  /** field-of-view half-angle, radians */
+  fov: number
+  range: number
+  label: string
+}
+
+export interface City {
+  /** 24 camera placements (CAM-02..CAM-25); CAM-01 is the operator webcam */
+  cameras?: CameraSpec[]
+  /** sector of each road node (parallel to `nodes`) — cheap live sector attribution */
+  nodeSectors?: SectorId[]
+}
+
+export interface Person {
+  /** home-anchor road node — wander bias target */
+  homeNode?: number
+  /** ticks remaining before the next destination is chosen */
+  dwell?: number
+}
+
+export interface Vehicle {
+  /** stable 0..1 activity key — vehicles whose key exceeds the day-cycle activity level park */
+  actKey?: number
+  /** parked (off-shift): skips movement, excluded from congestion counts */
+  parked?: boolean
+}
+
+export interface Incident {
+  /** nearest road node — patrol dispatch target */
+  nodeIdx?: number
+  /** ticks the SPAWNED phase lasts / on-scene ticks until resolution */
+  phaseDur?: number
+  /** next tick at which severity may escalate */
+  nextEscalateTick?: number
+  /** next tick at which a dispatch attempt is allowed */
+  dispatchAtTick?: number
+  /** tick the assigned unit arrived on scene (undefined until arrival) */
+  onSceneTick?: number
+}
