@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import TopBar from './shell/TopBar'
 import LeftRail from './shell/LeftRail'
@@ -15,6 +15,8 @@ import { alertTone, uiSwitch } from './lib/audio'
 
 const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph', '4': 'infra', '5': 'ops' }
 
+const OpsDeck = lazy(() => import('./modules/ops/OpsDeck'))
+
 function CenterStage({ view }: { view: ViewId }) {
   switch (view) {
     case 'map':
@@ -26,7 +28,7 @@ function CenterStage({ view }: { view: ViewId }) {
     case 'infra':
       return <ModuleStub title="INFRASTRUCTURE" />
     case 'ops':
-      return <ModuleStub title="OPS DECK" />
+      return <OpsDeck />
   }
 }
 
@@ -117,7 +119,9 @@ export default function App() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.14, ease: [0.2, 0.8, 0.2, 1] }}
             >
-              <CenterStage view={view} />
+              <Suspense fallback={<ModuleStub title="LINKING" note="LOADING SUBSYSTEM MODULE" />}>
+                <CenterStage view={view} />
+              </Suspense>
             </motion.div>
           </AnimatePresence>
           <GlitchWipe trigger={view} />
