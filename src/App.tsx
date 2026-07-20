@@ -17,6 +17,7 @@ const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph
 
 const OpsDeck = lazy(() => import('./modules/ops/OpsDeck'))
 const InfrastructureControl = lazy(() => import('./modules/infra/InfrastructureControl'))
+const RelationshipGraph = lazy(() => import('./modules/graph/RelationshipGraph'))
 
 function CenterStage({ view }: { view: ViewId }) {
   switch (view) {
@@ -25,7 +26,7 @@ function CenterStage({ view }: { view: ViewId }) {
     case 'grid':
       return <ModuleStub title="SURVEILLANCE GRID" />
     case 'graph':
-      return <ModuleStub title="PROFILER" />
+      return <RelationshipGraph />
     case 'infra':
       return <InfrastructureControl />
     case 'ops':
