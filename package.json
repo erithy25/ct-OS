@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "build:single": "vite build --mode singlefile && node scripts/singlefile.mjs",
     "test": "vitest run",
     "typecheck": "tsc -b --noEmit"
   },
