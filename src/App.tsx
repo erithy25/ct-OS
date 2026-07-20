@@ -15,16 +15,18 @@ import { alertTone, uiSwitch } from './lib/audio'
 
 const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph', '4': 'infra', '5': 'ops' }
 
+const TacticalMap = lazy(() => import('./modules/map/TacticalMap'))
 const OpsDeck = lazy(() => import('./modules/ops/OpsDeck'))
 const InfrastructureControl = lazy(() => import('./modules/infra/InfrastructureControl'))
 const RelationshipGraph = lazy(() => import('./modules/graph/RelationshipGraph'))
+const SurveillanceGrid = lazy(() => import('./modules/surveil/SurveillanceGrid'))
 
 function CenterStage({ view }: { view: ViewId }) {
   switch (view) {
     case 'map':
-      return <ModuleStub title="TACTICAL MAP" />
+      return <TacticalMap />
     case 'grid':
-      return <ModuleStub title="SURVEILLANCE GRID" />
+      return <SurveillanceGrid />
     case 'graph':
       return <RelationshipGraph />
     case 'infra':
