@@ -16,6 +16,7 @@ import { alertTone, uiSwitch } from './lib/audio'
 const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph', '4': 'infra', '5': 'ops' }
 
 const OpsDeck = lazy(() => import('./modules/ops/OpsDeck'))
+const InfrastructureControl = lazy(() => import('./modules/infra/InfrastructureControl'))
 
 function CenterStage({ view }: { view: ViewId }) {
   switch (view) {
@@ -26,7 +27,7 @@ function CenterStage({ view }: { view: ViewId }) {
     case 'graph':
       return <ModuleStub title="PROFILER" />
     case 'infra':
-      return <ModuleStub title="INFRASTRUCTURE" />
+      return <InfrastructureControl />
     case 'ops':
       return <OpsDeck />
   }
