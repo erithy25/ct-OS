@@ -1,0 +1,288 @@
+/* ── PANOPTICON // OS · design tokens ─────────────────────────────── */
+
+:root {
+  --bg-void: #05070a;
+  --bg-panel: #0a0e14;
+  --bg-panel-2: #0d131c;
+  --line: #1a2430;
+  --line-bright: #26384a;
+  --text-primary: #c9d6e4;
+  --text-dim: #6b7c8f;
+  --text-faint: #3a4756;
+  --accent: #22d3ee;
+  --accent-amber: #f5a623;
+  --accent-red: #ff3b47;
+  --accent-green: #34d399;
+  --accent-violet: #8b5cf6;
+  --glow-accent: 0 0 12px rgba(34, 211, 238, 0.35);
+  --ease-tac: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: var(--bg-void);
+  /* faint 32px engineering grid on the void */
+  background-image:
+    linear-gradient(rgba(201, 214, 228, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 214, 228, 0.02) 1px, transparent 1px);
+  background-size: 32px 32px;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.25);
+  color: var(--text-primary);
+}
+
+/* ── scrollbars ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-bright) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-bright);
+  border-radius: 0;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── recurring primitives ── */
+
+.lbl {
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.lbl-faint {
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.panel-surface {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.panel-surface-2 {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* ── data-update flash ── */
+@keyframes flash-cyan {
+  0% {
+    background-color: rgba(34, 211, 238, 0.28);
+  }
+  30% {
+    background-color: rgba(34, 211, 238, 0.28);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.flash-cyan {
+  animation: flash-cyan 0.42s var(--ease-tac);
+}
+
+@keyframes flash-amber {
+  0%,
+  30% {
+    background-color: rgba(245, 166, 35, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.flash-amber {
+  animation: flash-amber 0.42s var(--ease-tac);
+}
+
+/* ── blinking cursor / LEDs ── */
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.blink {
+  animation: blink 1.06s steps(1) infinite;
+}
+
+@keyframes led-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.led-pulse {
+  animation: led-pulse 1.6s var(--ease-tac) infinite;
+}
+
+@keyframes ring-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+/* ── CRT scanlines + sweep (kept subtle) ── */
+.scanlines-layer {
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.55) 0px,
+    rgba(0, 0, 0, 0.55) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  opacity: 0.055;
+}
+
+@keyframes crt-sweep {
+  0% {
+    transform: translateY(-16vh);
+  }
+  100% {
+    transform: translateY(116vh);
+  }
+}
+.crt-sweep {
+  height: 14vh;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(34, 211, 238, 0.028) 45%,
+    rgba(34, 211, 238, 0.045) 50%,
+    rgba(34, 211, 238, 0.028) 55%,
+    transparent 100%
+  );
+  animation: crt-sweep 8s linear infinite;
+}
+
+.crt-vignette {
+  background: radial-gradient(ellipse at center, transparent 58%, rgba(0, 0, 0, 0.38) 100%);
+}
+
+/* ── ticker marquee ── */
+@keyframes ticker-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+.ticker-track {
+  animation: ticker-scroll var(--ticker-dur, 48s) linear infinite;
+}
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+/* ── module glitch wipe ── */
+@keyframes glitch-slice {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  20% {
+    transform: translateX(var(--gx, 6px));
+  }
+  40% {
+    transform: translateX(calc(var(--gx, 6px) * -0.7));
+  }
+  60% {
+    transform: translateX(calc(var(--gx, 6px) * 0.4));
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+}
+
+/* ── boot sequence ── */
+@keyframes boot-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  93% {
+    opacity: 0.82;
+  }
+  94% {
+    opacity: 1;
+  }
+}
+
+/* corner bracket pulse */
+@keyframes bracket-pulse {
+  0% {
+    border-color: var(--accent);
+    box-shadow: 0 0 6px rgba(34, 211, 238, 0.45);
+  }
+  100% {
+    border-color: var(--line-bright);
+    box-shadow: none;
+  }
+}
+.bracket-pulse {
+  animation: bracket-pulse 0.7s var(--ease-tac);
+}
+
+/* generic soft appearance for panel mount */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 0.18s var(--ease-tac);
+}
