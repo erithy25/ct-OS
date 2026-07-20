@@ -9,9 +9,9 @@ import ModuleStub from './shell/ModuleStub'
 import Scanlines from './components/Scanlines'
 import GlitchWipe from './components/GlitchWipe'
 import CommandTerminal from './command/CommandTerminal'
-import { startSimLoop, useSim } from './sim/store'
+import { getEvents, startSimLoop, useSim } from './sim/store'
 import type { ViewId } from './sim/types'
-import { uiSwitch } from './lib/audio'
+import { alertTone, uiSwitch } from './lib/audio'
 
 const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph', '4': 'infra', '5': 'ops' }
 
@@ -36,6 +36,24 @@ export default function App() {
 
   useEffect(() => {
     startSimLoop()
+  }, [])
+
+  // audible ping on critical events, throttled
+  useEffect(() => {
+    let lastSeen = 0
+    let lastTone = 0
+    return useSim.subscribe((s, prev) => {
+      if (s.eventsVersion === prev.eventsVersion) return
+      const ev = getEvents()
+      const newest = ev[ev.length - 1]
+      if (!newest || newest.id <= lastSeen) return
+      lastSeen = newest.id
+      const now = performance.now()
+      if (newest.severity === 'CRIT' && now - lastTone > 4000) {
+        lastTone = now
+        alertTone(true)
+      }
+    })
   }, [])
 
   useEffect(() => {
