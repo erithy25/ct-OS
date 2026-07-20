@@ -16,6 +16,21 @@
   --accent-violet: #8b5cf6;
   --glow-accent: 0 0 12px rgba(34, 211, 238, 0.35);
   --ease-tac: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* RGB triplets so tailwind alpha modifiers (text-prim/85 etc.) work */
+  --bg-void-rgb: 5 7 10;
+  --bg-panel-rgb: 10 14 20;
+  --bg-panel-2-rgb: 13 19 28;
+  --line-rgb: 26 36 48;
+  --line-bright-rgb: 38 56 74;
+  --text-primary-rgb: 201 214 228;
+  --text-dim-rgb: 107 124 143;
+  --text-faint-rgb: 58 71 86;
+  --accent-rgb: 34 211 238;
+  --accent-amber-rgb: 245 166 35;
+  --accent-red-rgb: 255 59 71;
+  --accent-green-rgb: 52 211 153;
+  --accent-violet-rgb: 139 92 246;
 }
 
 html,
