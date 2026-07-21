@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { API_ORIGIN, useHome } from '../store'
 import { cameraStreamUrl } from '../../realworld/contract'
 import type { CameraInfo } from '../../realworld/contract'
 import type { Tile } from '../types'
 import WebcamTile from './WebcamTile'
+import DetectionOverlay from './DetectionOverlay'
 import CornerBrackets from '../../components/CornerBrackets'
 import { uiClick } from '../../lib/audio'
 
@@ -102,6 +103,8 @@ function TileFrame({ tile, expanded = false, onExpand, onCollapse }: { tile: Til
   const select = useHome((s) => s.select)
   const info = tile.info
   const color = STATUS_COLOR[info.status]
+  const mediaRef = useRef<HTMLVideoElement | HTMLImageElement | null>(null) as MutableRefObject<HTMLVideoElement | HTMLImageElement | null>
+  const live = info.status === 'live'
 
   return (
     <section
@@ -135,10 +138,11 @@ function TileFrame({ tile, expanded = false, onExpand, onCollapse }: { tile: Til
       {/* feed */}
       <div className="relative min-h-0 flex-1 bg-black">
         {tile.isWebcam ? (
-          <WebcamTile expanded={expanded} />
+          <WebcamTile expanded={expanded} mediaRef={mediaRef} />
         ) : (
-          <ServerFeed info={info} />
+          <ServerFeed info={info} mediaRef={mediaRef} />
         )}
+        {live && <DetectionOverlay cameraId={info.id} mediaRef={mediaRef} mirror={tile.isWebcam} />}
         {/* HUD */}
         <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1">
           <span className="h-1.5 w-1.5 rounded-full bg-red led-pulse" />
@@ -150,7 +154,7 @@ function TileFrame({ tile, expanded = false, onExpand, onCollapse }: { tile: Til
   )
 }
 
-function ServerFeed({ info }: { info: CameraInfo }) {
+function ServerFeed({ info, mediaRef }: { info: CameraInfo; mediaRef: MutableRefObject<HTMLVideoElement | HTMLImageElement | null> }) {
   const [failed, setFailed] = useState(false)
   if (info.status === 'error' || info.status === 'offline' || failed) {
     return (
@@ -169,6 +173,9 @@ function ServerFeed({ info }: { info: CameraInfo }) {
   }
   return (
     <img
+      ref={(el) => {
+        mediaRef.current = el
+      }}
       src={cameraStreamUrl(API_ORIGIN, info.id)}
       alt={info.name}
       crossOrigin="anonymous"

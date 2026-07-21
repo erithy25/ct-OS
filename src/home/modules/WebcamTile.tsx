@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type MutableRefObject } from 'react'
 import { useHome } from '../store'
 
 /**
@@ -26,8 +26,18 @@ async function getStream(): Promise<MediaStream> {
   return acquiring
 }
 
-export default function WebcamTile({ expanded = false }: { expanded?: boolean }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
+export default function WebcamTile({
+  expanded = false,
+  mediaRef,
+}: {
+  expanded?: boolean
+  mediaRef?: MutableRefObject<HTMLVideoElement | HTMLImageElement | null>
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const setVideo = (el: HTMLVideoElement | null) => {
+    videoRef.current = el
+    if (mediaRef) mediaRef.current = el
+  }
   const status = useHome((s) => s.webcamStatus)
   const setWebcamStatus = useHome((s) => s.setWebcamStatus)
   const webcamRequest = useHome((s) => s.webcamRequest)
@@ -65,7 +75,7 @@ export default function WebcamTile({ expanded = false }: { expanded?: boolean })
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
       <video
-        ref={videoRef}
+        ref={setVideo}
         muted
         playsInline
         className="h-full w-full object-cover"

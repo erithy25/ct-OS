@@ -179,12 +179,15 @@ export const useHome = create<HomeStore>((set, get) => {
 /* ── posture derivation ────────────────────────────────────────────── */
 
 function deriveStatus(): HomeStatus {
+  // posture reflects SECURITY events only — system health (CV/link) never
+  // inflates the threat level.
   const now = Date.now()
   let crit = 0
   let warn = 0
-  for (let i = events.length - 1; i >= 0 && events.length - i < 40; i--) {
+  for (let i = events.length - 1; i >= 0 && events.length - i < 60; i--) {
     const e = events[i]
     if (now - e.ts > 120_000) break
+    if (e.kind === 'SYSTEM' || e.kind === 'CAMERA') continue
     if (e.severity === 'CRIT') crit++
     else if (e.severity === 'WARN') warn++
   }

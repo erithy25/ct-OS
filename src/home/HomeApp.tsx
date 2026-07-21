@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { startHome, useHome } from './store'
+import { startDetection } from './cv/scheduler'
 import type { HomeView } from './types'
 import { HomeIntel, HomeLeftRail, HomeTicker, HomeTopBar } from './shell/HomeShell'
 import HomeBoot from './HomeBoot'
@@ -34,6 +35,7 @@ export default function HomeApp() {
 
   useEffect(() => {
     startHome()
+    startDetection()
   }, [])
 
   useEffect(() => {
