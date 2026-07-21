@@ -53,6 +53,15 @@ travel to the server, which owns the world, applies them, and streams the conseq
 back to every connected cockpit. See `docs/ROADMAP.md` for how this becomes the substrate
 for real data feeds, and `server/README.md` for env vars and the protocol.
 
+### Real telemetry (the first real data)
+
+The `OPERATOR NODE ● REAL` readout in the left rail is **genuine** — real render
+FPS, JS-heap %, network RTT, logical cores, and a main-thread load proxy from your
+browser, streamed through the world source. In `?source=remote`, a `HOST` sub-panel
+also shows the **server machine's** real CPU / memory / network (via
+`systeminformation`), and `CITY LOAD ◆` is genuinely blended with that real host CPU —
+stress the machine and the city's load rises. Everything else stays simulated fiction.
+
 ## The cockpit
 
 ```

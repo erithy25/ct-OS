@@ -53,6 +53,33 @@ describe('EngineHost', () => {
     host.dispose()
   })
 
+  it('accepts a real feed, announces it, and overlays it on the derived wire', () => {
+    const host = new EngineHost(DEFAULT_SEED)
+    host.tick()
+    host.command({ k: 'feed', metrics: { source: 'client', label: 'OPERATOR NODE', cpuPct: 82, memPct: 40, fps: 60, cores: 8, ts: 1 } })
+    const t = host.tick()
+    expect(t.derived.realTelemetry.client?.cpuPct).toBe(82)
+    expect(t.derived.realTelemetry.client?.cores).toBe(8)
+    expect(t.events.some((e) => e.channel === 'FEED' && e.message.includes('REAL FEED ONLINE'))).toBe(true)
+    host.dispose()
+  })
+
+  it('blends real CPU into the city load (same tick, with vs without feed)', () => {
+    const a = new EngineHost(DEFAULT_SEED)
+    let noFeed = 0
+    for (let i = 0; i < 5; i++) noFeed = a.tick().derived.vitals.cityLoad
+    a.dispose()
+
+    const b = new EngineHost(DEFAULT_SEED)
+    for (let i = 0; i < 4; i++) b.tick()
+    b.command({ k: 'feed', metrics: { source: 'client', label: 'X', cpuPct: 100, ts: 1 } })
+    const withFeed = b.tick().derived.vitals.cityLoad
+    b.dispose()
+
+    // deterministic sim → same base; real 100% CPU pulls the blended value up
+    expect(withFeed).toBeGreaterThan(noFeed)
+  })
+
   it('is deterministic: same seed → identical positions after N ticks', () => {
     const a = new EngineHost(DEFAULT_SEED)
     let ta: TickMsg | null = null

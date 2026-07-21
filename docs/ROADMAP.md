@@ -59,15 +59,29 @@ the inline host, and the server all produce the same NOVA HARBOR.
 
 ---
 
-## Phase 1 — First real feed (next)
+## Phase 1 — First real feed ✅ DONE
 
-Prove the whole chain *real source → server → WS → store → existing UI* with the
-smallest possible feed. The `EngineHost` gains an optional **DataSource** input;
-one real value flows into the existing vitals/charts. Nothing in the UI changes.
+The whole chain *real source → producer → transport → store → existing UI* now
+carries genuine data. The `EngineHost` accepts real telemetry via the existing
+`command` channel (`{ k:'feed' }`), overlays it on the wire `derived`, and
+**real CPU genuinely drives the city's "CPU load."** No UI was restructured —
+the vitals just became partly real, plus one clearly-labelled `● REAL` readout.
 
-- Safest first feed (offline): the Mac's own system metrics (`systeminformation`)
-  → System Vitals.
-- Domain-specific alternative — see below.
+- `src/realtime/dataFeed.ts` — the **operator node** feed: real render FPS,
+  JS-heap %, network downlink/RTT, logical cores, device memory, online state,
+  and a main-thread load proxy from real event-loop lag. Runs in every mode
+  (worker / inline / remote), fully guarded off-browser.
+- `server/src/hostFeed.ts` — the **host** feed (remote mode): the real machine's
+  CPU / memory / network via `systeminformation`, pushed into the server's
+  EngineHost. In `?source=remote` the cockpit shows the actual server host's
+  load, and `CITY LOAD ◆` reflects it.
+- `EngineHost` keeps telemetry by origin (`client` / `host`), announces first
+  contact on the `FEED` event channel, and exposes `derived.realTelemetry`.
+- UI: an `OPERATOR NODE ● REAL` block in the left rail (host sub-panel appears in
+  remote mode); `CITY LOAD ◆` marks real augmentation. 8 realtime tests.
+
+This is the template for every future feed: implement a sampler, send
+`{ k:'feed' }`, done — the UI never changes.
 
 ## Phase 2 — Domain semantics + real map/graph (forks by domain)
 

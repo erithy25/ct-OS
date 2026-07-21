@@ -22,6 +22,8 @@ import type {
   InfraState,
   IncidentPhase,
   IncidentType,
+  RealMetrics,
+  RealTelemetry,
   SectorId,
   Severity,
   EventChannel,
@@ -121,6 +123,8 @@ export interface DerivedWire {
   hotspotsRev: number
   threatRev: number
   noteRev: number
+  /** Phase 1 real telemetry overlaid onto the wire derived (empty if no feed) */
+  realTelemetry: RealTelemetry
 }
 
 /* ── messages: producer → client ───────────────────────────────────── */
@@ -193,6 +197,7 @@ export type SourceCommand =
   | { k: 'defcon'; level: number | null }
   | { k: 'track'; id: string; on: boolean }
   | { k: 'cv'; online: boolean; subjects: number }
+  | { k: 'feed'; metrics: RealMetrics }
 
 export interface CommandMsg {
   t: 'cmd'

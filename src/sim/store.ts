@@ -40,6 +40,7 @@ import {
 } from '../realtime/protocol'
 import { readConfig } from '../realtime/config'
 import { createSource } from '../realtime/sources'
+import { startClientFeed, type FeedHandle } from '../realtime/dataFeed'
 
 /** `?boot=skip` jumps straight to the cockpit (dev / automation nicety). */
 const skipBoot = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('boot') === 'skip'
@@ -181,6 +182,7 @@ export const useSim = create<SimStore>((set, get) => {
     threatBoard: [],
     linkUp: false,
     linkMode: 'sim',
+    realTelemetry: {},
 
     setBooted: (b) => set({ booted: b }),
     setView: (v) => set({ view: v }),
@@ -315,6 +317,7 @@ function applyHello(h: HelloMsg): void {
     hotspots: d.hotspots,
     threatBoard: d.threatBoard,
     analystNote: d.analystNote,
+    realTelemetry: d.realTelemetry ?? {},
     vitalsVersion: s.vitalsVersion + 1,
     eventsVersion: s.eventsVersion + 1,
   }))
@@ -414,7 +417,10 @@ function applyTick(t: TickMsg): void {
     incidentsActive: d.incidentsActive,
     camerasOnline: d.camerasOnline,
   }
-  if (t.tick % 5 === 0) patch.vitalsVersion = useSim.getState().vitalsVersion + 1
+  if (t.tick % 5 === 0) {
+    patch.vitalsVersion = useSim.getState().vitalsVersion + 1
+    patch.realTelemetry = d.realTelemetry ?? {}
+  }
   if (t.events.length > 0) patch.eventsVersion = useSim.getState().eventsVersion + 1
   if (t.infra) patch.infra = t.infra
   if (d.hotspotsRev !== lastHotspotsRev) {
@@ -441,6 +447,7 @@ const sink: SourceSink = {
 /* ── start: attach a world source (worker / inline / remote) ───────── */
 
 let started = false
+let clientFeed: FeedHandle | null = null
 
 export function startSimLoop(): void {
   if (started) return
@@ -450,8 +457,13 @@ export function startSimLoop(): void {
   useSim.setState({ linkMode: currentSource.mode })
   currentSource.start(sink)
 
+  // Phase 1: push real operator-node telemetry into whatever source is running
+  clientFeed = startClientFeed((metrics) => currentSource?.command({ k: 'feed', metrics }))
+
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
+      clientFeed?.stop()
+      clientFeed = null
       currentSource?.dispose()
       currentSource = null
       started = false

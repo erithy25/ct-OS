@@ -19,6 +19,7 @@ import { EngineHost } from '../../src/realtime/engineHost'
 import { isCommandMsg, type SourceCommand } from '../../src/realtime/protocol'
 import { config } from './config'
 import { Persistence } from './persistence'
+import { startHostFeed } from './hostFeed'
 
 /* ── command validation (zod mirror of SourceCommand) ──────────────── */
 
@@ -33,6 +34,22 @@ const CommandSchema = z.discriminatedUnion('k', [
   z.object({ k: z.literal('defcon'), level: z.number().nullable() }),
   z.object({ k: z.literal('track'), id: z.string(), on: z.boolean() }),
   z.object({ k: z.literal('cv'), online: z.boolean(), subjects: z.number() }),
+  z.object({
+    k: z.literal('feed'),
+    metrics: z.object({
+      source: z.enum(['client', 'host']),
+      label: z.string(),
+      cpuPct: z.number().optional(),
+      memPct: z.number().optional(),
+      netKBps: z.number().optional(),
+      rttMs: z.number().optional(),
+      fps: z.number().optional(),
+      cores: z.number().optional(),
+      deviceMemGB: z.number().optional(),
+      online: z.boolean().optional(),
+      ts: z.number(),
+    }),
+  }),
 ])
 
 /* ── boot: persistence + engine ────────────────────────────────────── */
@@ -43,6 +60,15 @@ const host = new EngineHost(config.SEED, { seedHistories: seeded.histories, seed
 
 const clients = new Set<WebSocket>()
 const startedAt = Date.now()
+
+// Phase 1: stream this machine's REAL metrics into the world
+const hostFeed = startHostFeed((metrics) => {
+  try {
+    host.command({ k: 'feed', metrics })
+  } catch {
+    /* ignore a bad feed sample */
+  }
+})
 
 function warn(msg: string, err?: unknown): void {
   if (err !== undefined) console.warn(`[server] ${msg}:`, err instanceof Error ? err.message : err)
@@ -194,6 +220,7 @@ function shutdown(signal: string): void {
   console.log(`\n[server] ${signal} received — flushing + shutting down`)
   clearInterval(tickTimer)
   clearInterval(snapTimer)
+  hostFeed.stop()
   persistence.save(host.snapshot(), host.seed)
   persistence.close()
   for (const ws of clients) {

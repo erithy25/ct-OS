@@ -60,6 +60,7 @@ export default function LeftRail() {
   const linkMode = useSim((s) => s.linkMode)
   const linkLabel = linkMode === 'remote' ? 'REMOTE' : 'LOCAL'
   const linkColor = linkMode === 'remote' ? 'var(--accent-violet)' : 'var(--accent-green)'
+  const realCpu = useSim((s) => s.realTelemetry.host?.cpuPct ?? s.realTelemetry.client?.cpuPct ?? null)
 
   const h = getHistories()
 
@@ -97,11 +98,13 @@ export default function LeftRail() {
 
       <div className="lbl-faint mt-2 border-y border-line px-3 py-1.5">SYSTEM VITALS</div>
       <div className="flex flex-col gap-2.5 px-3 py-2.5">
-        <VitalRow label="CITY LOAD" value={fmtPct(vitals.cityLoad, 0)} data={() => h.cityLoad} version={vitalsVersion} color="#22D3EE" />
+        <VitalRow label={realCpu !== null ? 'CITY LOAD ◆' : 'CITY LOAD'} value={fmtPct(vitals.cityLoad, 0)} data={() => h.cityLoad} version={vitalsVersion} color="#22D3EE" />
         <VitalRow label="ACTIVE UNITS" value={String(Math.round(vitals.activeUnits))} data={() => h.activeUnits} version={vitalsVersion} color="#34D399" />
         <VitalRow label="SENSOR UPTIME" value={fmtPct(vitals.sensorUptime)} data={() => h.sensorUptime} version={vitalsVersion} color="#34D399" />
         <VitalRow label="NETWORK LOAD" value={fmtPct(vitals.netLoad, 0)} data={() => h.netLoad} version={vitalsVersion} color="#F5A623" />
       </div>
+
+      <OperatorTelemetry />
 
       <div className="flex-1" />
 
@@ -158,3 +161,65 @@ function VitalRow({
     </div>
   )
 }
+
+/** Phase 1 — genuine local telemetry, streamed through the world source. */
+function OperatorTelemetry() {
+  const rt = useSim((s) => s.realTelemetry)
+  const client = rt.client
+  const host = rt.host
+  const active = !!(client || host)
+
+  return (
+    <>
+      <div className="mt-1 flex items-center justify-between border-y border-line px-3 py-1.5">
+        <span className="lbl-faint">OPERATOR NODE</span>
+        <span className="lbl flex items-center gap-1" style={{ color: active ? 'var(--accent-green)' : 'var(--text-faint)' }}>
+          <span
+            className={`inline-block h-1 w-1 rounded-full ${active ? 'led-pulse' : ''}`}
+            style={{ background: active ? 'var(--accent-green)' : 'var(--text-faint)', boxShadow: active ? '0 0 5px var(--accent-green)' : 'none' }}
+          />
+          REAL
+        </span>
+      </div>
+      <div className="px-3 py-2">
+        {!active && <div className="lbl-faint opacity-60">AWAITING LOCAL FEED…</div>}
+        {client && (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <Metric k="LOAD" v={pct(client.cpuPct)} />
+            <Metric k="RENDER" v={client.fps !== undefined ? `${client.fps} FPS` : '—'} />
+            <Metric k="JS HEAP" v={pct(client.memPct)} />
+            <Metric k="CORES" v={client.cores !== undefined ? String(client.cores) : '—'} />
+            {client.rttMs !== undefined && <Metric k="NET RTT" v={`${client.rttMs}ms`} />}
+            {client.deviceMemGB !== undefined && <Metric k="DEV MEM" v={`${client.deviceMemGB}GB`} />}
+          </div>
+        )}
+        {host && (
+          <div className="mt-1.5 border-t border-line/60 pt-1.5">
+            <div className="lbl-faint mb-1 flex items-center gap-1" style={{ color: 'var(--accent-violet)' }}>
+              <span className="inline-block h-1 w-1 rounded-full led-pulse" style={{ background: 'var(--accent-violet)' }} />
+              HOST · {host.label}
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              <Metric k="CPU" v={pct(host.cpuPct)} />
+              <Metric k="MEM" v={pct(host.memPct)} />
+              {host.cores !== undefined && <Metric k="CORES" v={String(host.cores)} />}
+              {host.netKBps !== undefined && <Metric k="NET" v={`${fmtNetKB(host.netKBps)}`} />}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function Metric({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-1">
+      <span className="lbl-faint">{k}</span>
+      <span className="num text-[11px] text-prim/90">{v}</span>
+    </div>
+  )
+}
+
+const pct = (n: number | undefined): string => (n === undefined ? '—' : `${Math.round(n)}%`)
+const fmtNetKB = (kb: number): string => (kb >= 1024 ? `${(kb / 1024).toFixed(1)}MB/s` : `${Math.round(kb)}KB/s`)

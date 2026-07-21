@@ -192,6 +192,7 @@ export type EventChannel =
   | 'COMMAND'
   | 'CV'
   | 'PREDICT'
+  | 'FEED'
 
 export interface SimEvent {
   id: number
@@ -253,6 +254,40 @@ export interface Dossier {
   timeline: TimelineEntry[]
   /** always present, always 'SIMULATED' — rendered wherever identities appear */
   source: 'SIMULATED'
+}
+
+/* ── real-data feed (Phase 1: the first real signals into the world) ── */
+
+/** A snapshot of real telemetry from an operator node (browser) or the host
+ *  machine (server). All values are genuine, sampled locally, never invented.
+ *  `source` distinguishes the operator's browser from the server host. */
+export interface RealMetrics {
+  source: 'client' | 'host'
+  label: string
+  /** real CPU utilisation %, 0..100 (host: system load; client: derived proxy) */
+  cpuPct?: number
+  /** real memory utilisation %, 0..100 */
+  memPct?: number
+  /** real network throughput, KB/s */
+  netKBps?: number
+  /** real round-trip / connection latency, ms */
+  rttMs?: number
+  /** real render frame rate (client) */
+  fps?: number
+  /** logical CPU cores */
+  cores?: number
+  /** device memory, GB (client: navigator.deviceMemory; host: total RAM) */
+  deviceMemGB?: number
+  /** network reachability */
+  online?: boolean
+  /** wall-clock ms of the sample */
+  ts: number
+}
+
+/** Latest real telemetry by origin; both present in remote mode. */
+export interface RealTelemetry {
+  client?: RealMetrics
+  host?: RealMetrics
 }
 
 /* ── analytics ─────────────────────────────────────────────────────── */
@@ -365,6 +400,8 @@ export interface SimStore {
   linkUp: boolean
   /** where the authoritative world runs: 'sim' = local worker/inline, 'remote' = node server */
   linkMode: 'sim' | 'remote'
+  /** Phase 1 real-data feed: latest genuine telemetry overlaid onto the world */
+  realTelemetry: RealTelemetry
 
   setBooted(b: boolean): void
   setView(v: ViewId): void

@@ -7,7 +7,7 @@
  * serialises everything into the wire protocol. It touches NO browser API,
  * so node can import it directly.
  */
-import type { Histories, InfraState, PatrolUnit, SectorId, World } from '../sim/types'
+import type { Histories, InfraState, PatrolUnit, RealMetrics, RealTelemetry, SectorId, World } from '../sim/types'
 import { advanceWorld, createWorld, getWorldDerived, type WorldInputs } from '../sim/world'
 import { DEFAULT_SEED } from '../sim/cityGen'
 import { emitEvent, onEvent } from '../sim/events'
@@ -71,6 +71,11 @@ export class EngineHost implements EngineHostApi {
   private infraDirty = false
   private offEvent: () => void
   private booted = false
+  /** Phase 1 real telemetry, by origin */
+  private metricsClient: RealMetrics | null = null
+  private metricsHost: RealMetrics | null = null
+  private feedEventAt = -1e9
+  private feedSeen = { client: false, host: false }
 
   constructor(seed: number = DEFAULT_SEED, opts: EngineHostOpts = {}) {
     this.seed = seed
@@ -113,14 +118,25 @@ export class EngineHost implements EngineHostApi {
     )
   }
 
+  private realTelemetry(): RealTelemetry {
+    const rt: RealTelemetry = {}
+    if (this.metricsClient) rt.client = this.metricsClient
+    if (this.metricsHost) rt.host = this.metricsHost
+    return rt
+  }
+
   private toDerivedWire(): DerivedWire {
     const d = getWorldDerived(this.world)
+    const vitals = { ...d.vitals }
+    // real CPU genuinely feeds the city's "CPU load" — prefer the host machine
+    const realCpu = this.metricsHost?.cpuPct ?? this.metricsClient?.cpuPct
+    if (typeof realCpu === 'number') vitals.cityLoad = vitals.cityLoad * 0.7 + realCpu * 0.3
     return {
       riskIndex: d.riskIndex,
       systemIntegrity: d.systemIntegrity,
       cascadeRisk: d.cascadeRisk,
       defcon: d.defcon,
-      vitals: { ...d.vitals },
+      vitals,
       detectionsPerMin: d.detectionsPerMin,
       incidentsActive: d.incidentsActive,
       camerasOnline: d.camerasOnline,
@@ -130,6 +146,7 @@ export class EngineHost implements EngineHostApi {
       hotspotsRev: d.hotspotsRev,
       threatRev: d.threatRev,
       noteRev: d.noteRev,
+      realTelemetry: this.realTelemetry(),
     }
   }
 
@@ -327,6 +344,24 @@ export class EngineHost implements EngineHostApi {
         this.inputs.cvOnline = cmd.online
         this.inputs.cvSubjects = cmd.subjects
         break
+      case 'feed':
+        this.ingestFeed(cmd.metrics)
+        break
+    }
+  }
+
+  /** accept a real telemetry sample; announce first contact per origin */
+  private ingestFeed(m: RealMetrics): void {
+    if (m.source === 'host') this.metricsHost = m
+    else this.metricsClient = m
+    if (!this.feedSeen[m.source]) {
+      this.feedSeen[m.source] = true
+      const parts: string[] = []
+      if (typeof m.cpuPct === 'number') parts.push(`CPU ${Math.round(m.cpuPct)}%`)
+      if (typeof m.memPct === 'number') parts.push(`MEM ${Math.round(m.memPct)}%`)
+      if (typeof m.cores === 'number') parts.push(`${m.cores} CORES`)
+      emitEvent('NOTICE', 'FEED', `REAL FEED ONLINE · ${m.label}${parts.length ? ' · ' + parts.join(' · ') : ''}`)
+      this.feedEventAt = this.world.tick
     }
   }
 
