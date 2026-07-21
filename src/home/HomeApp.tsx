@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { startHome, useHome } from './store'
 import { startDetection } from './cv/scheduler'
+import { startZoneWatch } from './zones/zoneWatch'
+import { startFaceWatch } from './people/faceWatch'
 import type { HomeView } from './types'
 import { HomeIntel, HomeLeftRail, HomeTicker, HomeTopBar } from './shell/HomeShell'
 import HomeBoot from './HomeBoot'
@@ -11,6 +13,10 @@ import GlitchWipe from '../components/GlitchWipe'
 import { uiSwitch } from '../lib/audio'
 
 const LiveWall = lazy(() => import('./modules/LiveWall'))
+const People = lazy(() => import('./people/People'))
+const Zones = lazy(() => import('./zones/Zones'))
+const Activity = lazy(() => import('./modules/Activity'))
+const Alerts = lazy(() => import('./modules/Alerts'))
 
 const VIEW_KEYS: Record<string, HomeView> = { '1': 'wall', '2': 'people', '3': 'zones', '4': 'activity', '5': 'alerts' }
 
@@ -19,13 +25,13 @@ function CenterStage({ view }: { view: HomeView }) {
     case 'wall':
       return <LiveWall />
     case 'people':
-      return <ComingSoon title="PEOPLE" note="HOUSEHOLD FACE ENROLLMENT (CONSENTED) · KNOWN VS UNKNOWN · PRESENCE — BUILDING NEXT" />
+      return <People />
     case 'zones':
-      return <ComingSoon title="ZONES" note="DRAW YOUR PROPERTY & ENTRY ZONES · BREACH ALERTS — BUILDING NEXT" />
+      return <Zones />
     case 'activity':
-      return <ComingSoon title="ACTIVITY" note="PER-PERSON TIMELINE · DWELL TIME · LEARNED ROUTINES — BUILDING NEXT" />
+      return <Activity />
     case 'alerts':
-      return <ComingSoon title="ALERTS" note="UNKNOWN VISITOR · ZONE BREACH · NIGHT ACTIVITY · PUSH — BUILDING NEXT" />
+      return <Alerts />
   }
 }
 
@@ -36,6 +42,8 @@ export default function HomeApp() {
   useEffect(() => {
     startHome()
     startDetection()
+    startZoneWatch()
+    startFaceWatch()
   }, [])
 
   useEffect(() => {
