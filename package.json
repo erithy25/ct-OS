@@ -10,10 +10,16 @@
     "preview": "vite preview",
     "build:single": "vite build --mode singlefile && node scripts/singlefile.mjs",
     "test": "vitest run",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "server": "pnpm --filter @panopticon/server start",
+    "server:dev": "pnpm --filter @panopticon/server dev",
+    "typecheck:server": "pnpm --filter @panopticon/server typecheck"
   },
   "engines": {
     "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.5",

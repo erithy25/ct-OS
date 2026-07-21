@@ -22,13 +22,36 @@ badge and the rest of the app is unaffected).
 
 ```sh
 pnpm install
-pnpm dev        # → http://localhost:5173
-pnpm test       # vitest: PRNG determinism, incident FSM, city generation, world smoke
+pnpm dev        # → http://localhost:5173  (engine runs in a Web Worker)
+pnpm test       # vitest: PRNG determinism, incident FSM, city gen, world + realtime
 pnpm build      # strict tsc + production bundle
 ```
 
 Best experienced in Chrome at ≥1440×900. Allow camera access for the CAM-01 feed and
 biometric mode; deny it and you get a graceful `NO SIGNAL // PERMISSION DENIED` state.
+
+### Where the simulation runs (client / server)
+
+The UI reads from a mirror world fed by a swappable **world source** — the same
+deterministic engine, one JSON wire protocol, three transports. Pick one at runtime:
+
+| URL | Producer | LINK badge |
+| --- | --- | --- |
+| `http://localhost:5173/` | Web Worker, off the render thread (default) | `LOCAL` |
+| `…/?source=inline` | main thread (fallback / single-file build) | `LOCAL` |
+| `…/?source=remote` | the node server over WebSocket | `REMOTE` |
+
+To run the authoritative world as a real server (persists to SQLite across restarts):
+
+```sh
+pnpm server                       # → ws://127.0.0.1:8787/ws  (+ GET /health)
+# then open  http://localhost:5173/?source=remote
+```
+
+Infrastructure actions issued in the browser (`⌘K blackout sector-1`, breaker toggles)
+travel to the server, which owns the world, applies them, and streams the consequences
+back to every connected cockpit. See `docs/ROADMAP.md` for how this becomes the substrate
+for real data feeds, and `server/README.md` for env vars and the protocol.
 
 ## The cockpit
 
