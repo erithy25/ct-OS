@@ -32,6 +32,8 @@ function CenterStage({ view }: { view: HomeView }) {
       return <Activity />
     case 'alerts':
       return <Alerts />
+    case 'brain':
+      return <ComingSoon title="SMART BRAIN" note="LINKING MODULE" />
   }
 }
 

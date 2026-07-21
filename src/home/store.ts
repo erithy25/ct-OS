@@ -7,7 +7,20 @@
 import { create } from 'zustand'
 import type { AddCameraRequest, CameraInfo, RealworldStatus } from '../realworld/contract'
 import { DEFAULT_REALWORLD_ORIGIN } from '../realworld/contract'
-import type { Detection, HomeEvent, HomeEventKind, HomeSeverity, HomeStatus, HomeView, Person, Tile, Zone } from './types'
+import type {
+  BrainSnapshot,
+  Detection,
+  FaceRead,
+  HomeEvent,
+  HomeEventKind,
+  HomeSeverity,
+  HomeStatus,
+  HomeView,
+  Person,
+  Tile,
+  TrackedBox,
+  Zone,
+} from './types'
 
 const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
 /** where the local HOMEWATCH server lives (override with ?api=) */
@@ -27,6 +40,22 @@ export const setDetections = (cameraId: string, dets: Detection[]): void => {
   detections.set(cameraId, dets)
 }
 export const getHomeEvents = (): HomeEvent[] => events
+
+/* ── non-reactive per-frame stores (overlay reads these every rAF) ─────── */
+
+/** identity-fused tracks per camera — written by the CV scheduler's tracker */
+const tracks = new Map<string, TrackedBox[]>()
+export const getTracks = (cameraId: string): TrackedBox[] => tracks.get(cameraId) ?? []
+export const setTracks = (cameraId: string, t: TrackedBox[]): void => {
+  tracks.set(cameraId, t)
+}
+
+/** latest per-face reads (box + match) per camera — written by the face watch */
+const faceReads = new Map<string, FaceRead[]>()
+export const getFaceReads = (cameraId: string): FaceRead[] => faceReads.get(cameraId) ?? []
+export const setFaceReads = (cameraId: string, r: FaceRead[]): void => {
+  faceReads.set(cameraId, r)
+}
 
 /* ── live face readout (published by the face watch, shown in PEOPLE) ──── */
 
@@ -131,6 +160,8 @@ export interface HomeStore {
   zones: Zone[]
   /** most recent operator-cam face read (KNOWN/UNKNOWN + distance), live */
   lastFace: FaceReadout | null
+  /** smart-brain snapshot — presence, activities, occupancy, insights */
+  brain: BrainSnapshot | null
   eventsVersion: number
   homeStatus: HomeStatus
   detectionsPerMin: number
@@ -156,6 +187,7 @@ export interface HomeStore {
   removeZone(id: string): void
   reportCv(online: boolean, perMin: number): void
   reportFace(r: FaceReadout | null): void
+  reportBrain(b: BrainSnapshot | null): void
   emit(severity: HomeSeverity, kind: HomeEventKind, message: string, opts?: { cameraId?: string; personId?: string; snapshot?: string }): void
   /** all tiles: webcam first, then server cameras */
   tiles(): Tile[]
@@ -183,6 +215,7 @@ export const useHome = create<HomeStore>((set, get) => {
     people: loadPeople(),
     zones: loadZones(),
     lastFace: null,
+    brain: null,
     eventsVersion: 0,
     homeStatus: 'SECURE',
     detectionsPerMin: 0,
@@ -223,6 +256,8 @@ export const useHome = create<HomeStore>((set, get) => {
         await fetch(api(`/api/cameras/${id}`), { method: 'DELETE' })
         emit('NOTICE', 'CAMERA', `CAMERA REMOVED · ${id}`)
         detections.delete(id)
+        tracks.delete(id)
+        faceReads.delete(id)
         await refresh()
       } catch {
         /* ignore */
@@ -254,6 +289,7 @@ export const useHome = create<HomeStore>((set, get) => {
     },
     reportCv: (online, perMin) => set({ cvOnline: online, detectionsPerMin: perMin }),
     reportFace: (r) => set({ lastFace: r }),
+    reportBrain: (b) => set({ brain: b }),
     emit,
 
     tiles: () => {
@@ -318,4 +354,10 @@ export function startHome(): void {
       started = false
     })
   }
+}
+
+/* ── dev-only inspection hook (never in production builds) ─────────────── */
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __hw?: unknown }).__hw = { useHome, setTracks, setDetections, setFaceReads }
 }

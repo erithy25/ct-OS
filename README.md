@@ -79,8 +79,14 @@ your machine.
 | **ZONES** | Draw property / entry / driveway regions per camera; alert when a person enters an armed zone (with night-only + known-person options). |
 | **ACTIVITY** | Filterable event timeline, per-person presence, and a simple learned-routine histogram from your own history. |
 | **ALERTS** | Alert center for unknown visitors + zone breaches, a rules summary, and browser push notifications. |
+| **SMART BRAIN** | The awareness layer: on-device pose-based activity sense (sitting / standing / walking / waving …), who's where right now, per-person day timelines, learned routines and gentle insights. Neutral observations only — never a judgement. |
 
-Keyboard: `1–5` switch modules · `⌘K` command (add/remove/goto) · `Esc` closes overlays.
+Live camera tiles draw **precision tracking boxes** — thin outlines that follow each person
+with velocity prediction (no visible lag): **green** with `NAME · ROLE` for enrolled
+household/guests, **red** `UNKNOWN` for unrecognized people, neutral cyan while identity is
+still resolving.
+
+Keyboard: `1–6` switch modules · `⌘K` command (add/remove/goto) · `Esc` closes overlays.
 Append `?boot=skip` to skip the boot sequence, `?api=http://host:port` to point at a
 non-default server.
 

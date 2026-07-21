@@ -105,23 +105,40 @@ export function retryFace(): Promise<boolean> {
   return loadFace()
 }
 
+/** One face found in a frame: normalized box + its 128-d descriptor. */
+export interface DetectedFace {
+  /** face box normalized 0..1 to the source frame [x, y, w, h] */
+  box: [number, number, number, number]
+  descriptor: Float32Array
+}
+
 /**
- * Detect the single LARGEST face in a frame and return its 128-d descriptor,
- * or null if there is no usable face / the engine isn't ready. A non-null
- * result means "a face is present"; the caller decides KNOWN vs UNKNOWN.
- * Fully guarded — never throws.
+ * Detect EVERY face in a frame and return normalized boxes + descriptors.
+ * This is the primitive behind live matching (multi-person) and identity
+ * fusion onto tracked person boxes. Fully guarded — returns [] on any
+ * problem, never throws.
  */
-export async function computeDescriptor(
+export async function computeFaces(
   input: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement,
-): Promise<Float32Array | null> {
+): Promise<DetectedFace[]> {
   const api = faceapi
-  if (!api || state !== 'ready') return null
+  if (!api || state !== 'ready') return []
   try {
-    // frame must actually have pixels
+    // frame must actually have pixels; note source dims for normalization
+    let sw = 0
+    let sh = 0
     if (input instanceof HTMLVideoElement) {
-      if (input.readyState < 2 || input.videoWidth === 0 || input.videoHeight === 0) return null
+      if (input.readyState < 2 || input.videoWidth === 0 || input.videoHeight === 0) return []
+      sw = input.videoWidth
+      sh = input.videoHeight
     } else if (input instanceof HTMLImageElement) {
-      if (!input.complete || input.naturalWidth === 0) return null
+      if (!input.complete || input.naturalWidth === 0) return []
+      sw = input.naturalWidth
+      sh = input.naturalHeight
+    } else {
+      sw = input.width
+      sh = input.height
+      if (!sw || !sh) return []
     }
 
     const options = new api.TinyFaceDetectorOptions({
@@ -129,16 +146,33 @@ export async function computeDescriptor(
       scoreThreshold: DETECT_SCORE,
     })
     const results = await api.detectAllFaces(input, options).withFaceLandmarks().withFaceDescriptors()
-    if (!results.length) return null
-
-    let largest = results[0]
-    for (const r of results) {
-      if (r.detection.box.area > largest.detection.box.area) largest = r
-    }
-    return largest.descriptor
+    return results.map((r) => {
+      const b = r.detection.box
+      return {
+        box: [b.x / sw, b.y / sh, b.width / sw, b.height / sh] as [number, number, number, number],
+        descriptor: r.descriptor,
+      }
+    })
   } catch {
-    return null
+    return []
   }
+}
+
+/**
+ * Detect the single LARGEST face in a frame and return its 128-d descriptor
+ * (enrollment uses this), or null if there is no usable face / the engine
+ * isn't ready. Fully guarded — never throws.
+ */
+export async function computeDescriptor(
+  input: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement,
+): Promise<Float32Array | null> {
+  const faces = await computeFaces(input)
+  if (faces.length === 0) return null
+  let largest = faces[0]
+  for (const f of faces) {
+    if (f.box[2] * f.box[3] > largest.box[2] * largest.box[3]) largest = f
+  }
+  return largest.descriptor
 }
 
 export interface MatchResult {

@@ -14,8 +14,9 @@
  * swallowed so the watch (and the app) never crash. If the face engine is
  * OFFLINE the loop simply idles (still decaying presence) until it recovers.
  */
-import { useHome, WEBCAM_ID } from '../store'
-import { computeDescriptor, faceState, loadFace, MATCH_THRESHOLD, nearest, onFaceState } from './faceEngine'
+import { setFaceReads, useHome, WEBCAM_ID } from '../store'
+import type { FaceRead } from '../types'
+import { computeFaces, faceState, loadFace, MATCH_THRESHOLD, nearest, onFaceState } from './faceEngine'
 
 /* ── tunables ──────────────────────────────────────────────────────── */
 
@@ -142,28 +143,54 @@ async function step(): Promise<void> {
     return
   }
 
-  const descriptor = await computeDescriptor(v)
-  if (!descriptor) {
+  const faces = await computeFaces(v)
+  const now = Date.now()
+  if (faces.length === 0) {
     // engine ready + camera live, but no face in the frame
-    st.reportFace({ ts: Date.now(), present: false, personId: null, nearestId: null, distance: null })
+    setFaceReads(WEBCAM_ID, [])
+    st.reportFace({ ts: now, present: false, personId: null, nearestId: null, distance: null })
     return
   }
 
   const people = useHome.getState().people
-  const near = nearest(descriptor, people)
-  const matched = near !== null && near.distance <= MATCH_THRESHOLD ? near : null
 
-  // publish the live read so PEOPLE can SHOW recognition happening in real time
+  // match EVERY visible face; publish per-face reads for track-identity fusion
+  const reads: FaceRead[] = []
+  let largestArea = -1
+  let largestRead: FaceRead | null = null
+  let largestNearestId: string | null = null
+  let anyUnknown = false
+  for (const f of faces) {
+    const near = nearest(f.descriptor, people)
+    const matched = near !== null && near.distance <= MATCH_THRESHOLD ? near : null
+    const read: FaceRead = {
+      box: f.box,
+      personId: matched?.personId ?? null,
+      distance: near?.distance ?? null,
+      ts: now,
+    }
+    reads.push(read)
+    if (matched) markPresent(matched.personId)
+    else anyUnknown = true
+    const area = f.box[2] * f.box[3]
+    if (area > largestArea) {
+      largestArea = area
+      largestRead = read
+      largestNearestId = near?.personId ?? null
+    }
+  }
+  setFaceReads(WEBCAM_ID, reads)
+
+  // the largest face drives the PEOPLE live-recognition strip
   useHome.getState().reportFace({
-    ts: Date.now(),
+    ts: now,
     present: true,
-    personId: matched?.personId ?? null,
-    nearestId: near?.personId ?? null,
-    distance: near?.distance ?? null,
+    personId: largestRead?.personId ?? null,
+    nearestId: largestNearestId,
+    distance: largestRead?.distance ?? null,
   })
 
-  if (matched) markPresent(matched.personId)
-  else emitUnknown() // KNOWN-vs-UNKNOWN only — never a stronger label
+  if (anyUnknown) emitUnknown() // KNOWN-vs-UNKNOWN only — never a stronger label
 }
 
 async function tick(): Promise<void> {
@@ -195,6 +222,14 @@ export function startFaceWatch(): void {
   void loadFace()
   void initWebcam()
   void tick()
+}
+
+/**
+ * The hidden webcam <video> the watch reads frames from — shared read-only
+ * with the activity brain (pose runs on the same element; still local-only).
+ */
+export function getFaceVideo(): HTMLVideoElement | null {
+  return video
 }
 
 /** Stop the presence loop (leaves the shared stream intact for the UI). */
