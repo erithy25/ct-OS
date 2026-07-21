@@ -19,7 +19,9 @@
     "node": ">=20"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.5",
@@ -27,6 +29,7 @@
     "@mediapipe/tasks-vision": "^0.10.21",
     "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow/tfjs": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.15",
     "cmdk": "^1.1.1",
     "d3-drag": "^3.0.0",
     "d3-force": "^3.0.0",
