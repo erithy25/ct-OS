@@ -48,15 +48,19 @@ long-lived process. Run each command on its own line — don't paste the `# …`
 pnpm install
 
 # ── Terminal tab 1 — the camera/status server (leave it running) ──
-pnpm server        # → http://127.0.0.1:8787  (prints "leave this running")
+pnpm homewatch     # → http://127.0.0.1:8787  (prints "leave this running")
 
 # ── Terminal tab 2 — the cockpit UI (leave it running too) ──
 pnpm dev           # → http://localhost:5173
 ```
 
-If the cockpit shows **SERVER OFFLINE**, tab 1 isn't running — start `pnpm server` and keep
-it open. The server is intentionally tiny (no database, no native add-ons), so it starts
-instantly and can't be blocked by a build step.
+> ⚠️ Don't type `pnpm server` without `run`: pnpm has a *built-in* (deprecated) command
+> named `server` that shadows the script and silently does nothing. Use `pnpm homewatch`
+> (or `pnpm run server` — with `run` the script always wins).
+
+If the cockpit shows **SERVER OFFLINE**, tab 1 isn't running — start `pnpm homewatch` and
+keep it open. The server is intentionally tiny (no database, no native add-ons), so it
+starts instantly and can't be blocked by a build step.
 
 Open `http://localhost:5173`, allow camera access for CAM-01 (your webcam), then
 **+ ADD CAMERA** and paste an IP-camera URL:

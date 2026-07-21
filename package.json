@@ -11,9 +11,10 @@
     "build:single": "vite build --mode singlefile && node scripts/singlefile.mjs",
     "test": "vitest run",
     "typecheck": "tsc -b --noEmit",
-    "server": "pnpm --filter @panopticon/server start",
-    "server:dev": "pnpm --filter @panopticon/server dev",
-    "typecheck:server": "pnpm --filter @panopticon/server typecheck"
+    "homewatch": "pnpm -C server start",
+    "server": "pnpm -C server start",
+    "server:dev": "pnpm -C server dev",
+    "typecheck:server": "pnpm -C server typecheck"
   },
   "engines": {
     "node": ">=20"
