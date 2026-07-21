@@ -4,6 +4,7 @@ import { startHome, useHome } from './store'
 import { startDetection } from './cv/scheduler'
 import { startZoneWatch } from './zones/zoneWatch'
 import { startFaceWatch } from './people/faceWatch'
+import { startBrain } from './activity/brain'
 import type { HomeView } from './types'
 import { HomeIntel, HomeLeftRail, HomeTicker, HomeTopBar } from './shell/HomeShell'
 import HomeBoot from './HomeBoot'
@@ -17,8 +18,9 @@ const People = lazy(() => import('./people/People'))
 const Zones = lazy(() => import('./zones/Zones'))
 const Activity = lazy(() => import('./modules/Activity'))
 const Alerts = lazy(() => import('./modules/Alerts'))
+const Brain = lazy(() => import('./modules/Brain'))
 
-const VIEW_KEYS: Record<string, HomeView> = { '1': 'wall', '2': 'people', '3': 'zones', '4': 'activity', '5': 'alerts' }
+const VIEW_KEYS: Record<string, HomeView> = { '1': 'wall', '2': 'people', '3': 'zones', '4': 'activity', '5': 'alerts', '6': 'brain' }
 
 function CenterStage({ view }: { view: HomeView }) {
   switch (view) {
@@ -33,7 +35,7 @@ function CenterStage({ view }: { view: HomeView }) {
     case 'alerts':
       return <Alerts />
     case 'brain':
-      return <ComingSoon title="SMART BRAIN" note="LINKING MODULE" />
+      return <Brain />
   }
 }
 
@@ -46,6 +48,7 @@ export default function HomeApp() {
     startDetection()
     startZoneWatch()
     startFaceWatch()
+    startBrain()
   }, [])
 
   useEffect(() => {
@@ -149,7 +152,7 @@ function CommandPalette() {
         return `REMOVED ${arg}`
       case 'goto': {
         const v = arg as HomeView
-        if (['wall', 'people', 'zones', 'activity', 'alerts'].includes(v)) {
+        if (['wall', 'people', 'zones', 'activity', 'alerts', 'brain'].includes(v)) {
           s.setView(v)
           setTimeout(() => setOpen(false), 250)
           return `→ ${v.toUpperCase()}`
@@ -157,7 +160,7 @@ function CommandPalette() {
         return `ERR: unknown view '${arg}'`
       }
       case 'help':
-        return 'COMMANDS: add <url|test> · remove <CAM-ID> · goto wall|people|zones|activity|alerts'
+        return 'COMMANDS: add <url|test> · remove <CAM-ID> · goto wall|people|zones|activity|alerts|brain'
       default:
         return `ERR: unknown '${cmd}' — try help`
     }

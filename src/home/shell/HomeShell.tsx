@@ -80,6 +80,7 @@ const NAV: { id: HomeView; label: string; key: string; icon: ReactNode }[] = [
   { id: 'zones', label: 'ZONES', key: '3', icon: <GlyphZones /> },
   { id: 'activity', label: 'ACTIVITY', key: '4', icon: <GlyphActivity /> },
   { id: 'alerts', label: 'ALERTS', key: '5', icon: <GlyphAlerts /> },
+  { id: 'brain', label: 'SMART BRAIN', key: '6', icon: <GlyphBrain /> },
 ]
 
 export function HomeLeftRail() {
@@ -91,12 +92,23 @@ export function HomeLeftRail() {
   const cvOnline = useHome((s) => s.cvOnline)
   const detPerMin = useHome((s) => s.detectionsPerMin)
   const people = useHome((s) => s.people)
+  const brain = useHome((s) => s.brain)
   const muted = useHome((s) => s.muted)
   const setMuted = useHome((s) => s.setMuted)
 
   const online = serverCameras.filter((c) => c.status === 'live').length + (webcamStatus === 'live' ? 1 : 0)
   const total = serverCameras.length + 1
   const present = people.filter((p) => p.present).length
+
+  // 'offline' still reads LIMITED — the brain keeps running on motion fallback
+  const brainStat: { value: string; color: string } =
+    brain === null || brain.pose === 'idle'
+      ? { value: 'STANDBY', color: 'var(--text-dim)' }
+      : brain.pose === 'ready'
+        ? { value: 'ACTIVE', color: 'var(--accent-green)' }
+        : brain.pose === 'loading'
+          ? { value: 'LOADING', color: 'var(--accent-amber)' }
+          : { value: 'LIMITED', color: 'var(--accent-amber)' }
 
   return (
     <nav className="relative z-20 flex min-h-0 flex-col border-r border-line bg-panel">
@@ -129,6 +141,7 @@ export function HomeLeftRail() {
       <div className="flex flex-col gap-2 px-3 py-2.5">
         <Stat label="CAMERAS ONLINE" value={`${online}/${total}`} color={online === total ? 'var(--accent-green)' : 'var(--accent-amber)'} />
         <Stat label="DETECTION" value={cvOnline ? 'ACTIVE' : 'STANDBY'} color={cvOnline ? 'var(--accent-green)' : 'var(--text-dim)'} />
+        <Stat label="BRAIN" value={brainStat.value} color={brainStat.color} />
         <Stat label="DETECTIONS/MIN" value={String(Math.round(detPerMin))} />
         <Stat label="HOUSEHOLD PRESENT" value={String(present)} />
         <Stat label="FFMPEG" value={status?.ffmpeg ? 'READY' : status ? 'MISSING' : '—'} color={status?.ffmpeg ? 'var(--accent-green)' : 'var(--accent-amber)'} />
@@ -281,6 +294,16 @@ function GlyphAlerts() {
   return (
     <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.2">
       <path d="M8 2 2 13h12L8 2Z" strokeLinejoin="round" /><path d="M8 6.5v3.2M8 11.4v.1" />
+    </svg>
+  )
+}
+function GlyphBrain() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <path d="M8 2.5c3.2 0 5.5 2.1 5.5 4.9 0 2.9-2.3 6.1-5.5 6.1S2.5 10.3 2.5 7.4C2.5 4.6 4.8 2.5 8 2.5Z" strokeLinejoin="round" />
+      <path d="M8 2.5v11" opacity="0.5" />
+      <circle cx="5.6" cy="6.8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="10.4" cy="8.4" r="0.9" fill="currentColor" stroke="none" />
     </svg>
   )
 }

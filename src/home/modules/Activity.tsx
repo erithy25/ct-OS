@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Panel from '../../components/Panel'
 import Sparkline from '../../components/Sparkline'
-import { getHomeEvents, useHome } from '../store'
+import { getHomeEvents, useHome, WEBCAM_ID } from '../store'
 import type { HomeEvent, HomeEventKind, HomeSeverity } from '../types'
 import { fmtLocal } from '../../lib/format'
 import {
@@ -81,32 +81,84 @@ export default function Activity() {
   }, [serverCameras, webcamStatus])
 
   return (
-    <div className="flex h-full min-h-0 gap-2 p-2">
-      <Timeline eventsVersion={eventsVersion} onSelect={select} className="min-h-0 flex-[1.5]" />
+    <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+      <NowStrip now={now} />
 
-      <div className="flex min-h-0 w-[304px] shrink-0 flex-col gap-2">
-        <Panel
-          title="HOUSEHOLD PRESENCE · TODAY"
-          className="min-h-0 flex-1"
-          bodyClassName="overflow-y-auto"
-          right={<span className="num lbl-faint">{presence.filter((p) => p.presentNow).length}/{presence.length} IN</span>}
-        >
-          <PresenceList presence={presence} people={people} onSelect={select} />
-        </Panel>
+      <div className="flex min-h-0 flex-1 gap-2">
+        <Timeline eventsVersion={eventsVersion} onSelect={select} className="min-h-0 flex-[1.5]" />
 
-        <Panel
-          title="PER-CAMERA DETECTIONS · 30M"
-          className="min-h-0 flex-1"
-          bodyClassName="overflow-y-auto"
-          right={<span className="num lbl-faint">{cameras.length} CAM</span>}
-        >
-          <CameraList cameras={cameras} eventsVersion={eventsVersion} now={now} onSelect={select} />
-        </Panel>
+        <div className="flex min-h-0 w-[304px] shrink-0 flex-col gap-2">
+          <Panel
+            title="HOUSEHOLD PRESENCE · TODAY"
+            className="min-h-0 flex-1"
+            bodyClassName="overflow-y-auto"
+            right={<span className="num lbl-faint">{presence.filter((p) => p.presentNow).length}/{presence.length} IN</span>}
+          >
+            <PresenceList presence={presence} people={people} onSelect={select} />
+          </Panel>
 
-        <Panel title="TYPICAL ACTIVITY" brackets className="shrink-0" bodyClassName="p-2">
-          <RoutineChart hist={hist} note={routine.note} total={routine.total} now={now} />
-        </Panel>
+          <Panel
+            title="PER-CAMERA DETECTIONS · 30M"
+            className="min-h-0 flex-1"
+            bodyClassName="overflow-y-auto"
+            right={<span className="num lbl-faint">{cameras.length} CAM</span>}
+          >
+            <CameraList cameras={cameras} eventsVersion={eventsVersion} now={now} onSelect={select} />
+          </Panel>
+
+          <Panel title="TYPICAL ACTIVITY" brackets className="shrink-0" bodyClassName="p-2">
+            <RoutineChart hist={hist} note={routine.note} total={routine.total} now={now} />
+          </Panel>
+        </div>
       </div>
+    </div>
+  )
+}
+
+/* ── live NOW strip (smart brain) ──────────────────────────────────── */
+
+/**
+ * One-line "who is doing what right now" readout fed by the smart brain:
+ * a chip per present household member (neutral activity + dwell) plus
+ * compact per-camera occupancy counts. Quietly reads BRAIN STANDBY until
+ * the engine publishes its first snapshot.
+ */
+function NowStrip({ now }: { now: number }) {
+  const brain = useHome((s) => s.brain)
+  const serverCameras = useHome((s) => s.serverCameras)
+
+  if (!brain) {
+    return (
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+        <span className="lbl text-prim/80">NOW</span>
+        <span className="lbl border border-line px-1.5 py-0.5 text-faint">BRAIN STANDBY</span>
+      </div>
+    )
+  }
+
+  const present = (brain.people ?? []).filter((p) => p.present)
+  const camLabel = (id: string): string => {
+    if (id === WEBCAM_ID) return 'OPERATOR CAM'
+    const name = serverCameras.find((c) => c.id === id)?.name
+    return name ? name.split('·')[0].trim() : id
+  }
+  const occ = (brain.occupancy ?? []).map((o) => `${camLabel(o.cameraId)} ${o.persons}`).join(' · ')
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+      <span className="lbl text-prim/80">NOW</span>
+      {present.map((p) => {
+        const dwellM = p.activitySince != null ? Math.max(0, Math.floor((now - p.activitySince) / 60_000)) : null
+        return (
+          <span key={p.personId} className="lbl flex items-center gap-1.5 border border-line bg-panel2/60 px-1.5 py-0.5 text-prim/85">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: p.color, boxShadow: `0 0 5px ${p.color}` }} />
+            {p.name.toUpperCase()} · {p.activity ? `${p.activity}${dwellM != null ? ` · ${dwellM}m` : ''}` : 'PRESENT'}
+          </span>
+        )
+      })}
+      {present.length === 0 && <span className="lbl-faint">NO ONE ON CAMERA</span>}
+      <span className="flex-1" />
+      {occ && <span className="num lbl-faint">{occ}</span>}
     </div>
   )
 }
