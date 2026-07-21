@@ -28,6 +28,72 @@ export const setDetections = (cameraId: string, dets: Detection[]): void => {
 }
 export const getHomeEvents = (): HomeEvent[] => events
 
+/* ── live face readout (published by the face watch, shown in PEOPLE) ──── */
+
+export interface FaceReadout {
+  ts: number
+  /** a face is visible in the operator-cam frame right now */
+  present: boolean
+  /** matched enrolled person id within threshold (KNOWN) or null (UNKNOWN / none) */
+  personId: string | null
+  /** closest enrolled person id regardless of threshold — powers "almost matched" */
+  nearestId: string | null
+  /** euclidean distance to the nearest enrolled sample, null if nobody enrolled */
+  distance: number | null
+}
+
+/* ── local persistence — roster + zones survive reloads/HMR ────────────── */
+
+const PEOPLE_KEY = 'homewatch.people.v1'
+const ZONES_KEY = 'homewatch.zones.v1'
+
+function loadPeople(): Person[] {
+  try {
+    if (typeof localStorage === 'undefined') return []
+    const raw = localStorage.getItem(PEOPLE_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw) as Person[]
+    if (!Array.isArray(arr)) return []
+    // presence is live state — never restored from disk
+    return arr
+      .filter((p) => p && typeof p.id === 'string' && Array.isArray(p.descriptors) && p.descriptors.length > 0)
+      .map((p) => ({ ...p, present: false, lastSeen: undefined }))
+  } catch {
+    return []
+  }
+}
+
+function loadZones(): Zone[] {
+  try {
+    if (typeof localStorage === 'undefined') return []
+    const raw = localStorage.getItem(ZONES_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw) as Zone[]
+    return Array.isArray(arr) ? arr.filter((z) => z && typeof z.id === 'string' && Array.isArray(z.points)) : []
+  } catch {
+    return []
+  }
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+/** Coalesce rapid roster/zone edits (and presence churn) into one write/400ms. */
+function schedulePersist(): void {
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    try {
+      if (typeof localStorage === 'undefined') return
+      const s = useHome.getState()
+      // strip live presence — only the durable enrollment is persisted
+      const roster = s.people.map(({ present: _present, lastSeen: _lastSeen, lastCameraId: _lastCameraId, ...rest }) => rest)
+      localStorage.setItem(PEOPLE_KEY, JSON.stringify(roster))
+      localStorage.setItem(ZONES_KEY, JSON.stringify(s.zones))
+    } catch {
+      /* storage unavailable / full — non-fatal, in-memory state still works */
+    }
+  }, 400)
+}
+
 /* ── webcam tile (browser-local; never server-bridged) ─────────────── */
 
 export const WEBCAM_ID = 'CAM-01'
@@ -63,6 +129,8 @@ export interface HomeStore {
   expandedId: string | null
   people: Person[]
   zones: Zone[]
+  /** most recent operator-cam face read (KNOWN/UNKNOWN + distance), live */
+  lastFace: FaceReadout | null
   eventsVersion: number
   homeStatus: HomeStatus
   detectionsPerMin: number
@@ -87,6 +155,7 @@ export interface HomeStore {
   upsertZone(z: Zone): void
   removeZone(id: string): void
   reportCv(online: boolean, perMin: number): void
+  reportFace(r: FaceReadout | null): void
   emit(severity: HomeSeverity, kind: HomeEventKind, message: string, opts?: { cameraId?: string; personId?: string; snapshot?: string }): void
   /** all tiles: webcam first, then server cameras */
   tiles(): Tile[]
@@ -111,8 +180,9 @@ export const useHome = create<HomeStore>((set, get) => {
     webcamError: undefined,
     selectedId: null,
     expandedId: null,
-    people: [],
-    zones: [],
+    people: loadPeople(),
+    zones: loadZones(),
+    lastFace: null,
     eventsVersion: 0,
     homeStatus: 'SECURE',
     detectionsPerMin: 0,
@@ -158,14 +228,32 @@ export const useHome = create<HomeStore>((set, get) => {
         /* ignore */
       }
     },
-    setPeople: (people) => set({ people }),
-    upsertPerson: (p) =>
-      set((s) => ({ people: [...s.people.filter((x) => x.id !== p.id), p].sort((a, b) => a.addedAt - b.addedAt) })),
-    removePerson: (id) => set((s) => ({ people: s.people.filter((p) => p.id !== id) })),
-    setZones: (zones) => set({ zones }),
-    upsertZone: (z) => set((s) => ({ zones: [...s.zones.filter((x) => x.id !== z.id), z] })),
-    removeZone: (id) => set((s) => ({ zones: s.zones.filter((z) => z.id !== id) })),
+    setPeople: (people) => {
+      set({ people })
+      schedulePersist()
+    },
+    upsertPerson: (p) => {
+      set((s) => ({ people: [...s.people.filter((x) => x.id !== p.id), p].sort((a, b) => a.addedAt - b.addedAt) }))
+      schedulePersist()
+    },
+    removePerson: (id) => {
+      set((s) => ({ people: s.people.filter((p) => p.id !== id) }))
+      schedulePersist()
+    },
+    setZones: (zones) => {
+      set({ zones })
+      schedulePersist()
+    },
+    upsertZone: (z) => {
+      set((s) => ({ zones: [...s.zones.filter((x) => x.id !== z.id), z] }))
+      schedulePersist()
+    },
+    removeZone: (id) => {
+      set((s) => ({ zones: s.zones.filter((z) => z.id !== id) }))
+      schedulePersist()
+    },
     reportCv: (online, perMin) => set({ cvOnline: online, detectionsPerMin: perMin }),
+    reportFace: (r) => set({ lastFace: r }),
     emit,
 
     tiles: () => {

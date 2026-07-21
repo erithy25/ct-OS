@@ -42,6 +42,8 @@ export default function WebcamTile({
   const setWebcamStatus = useHome((s) => s.setWebcamStatus)
   const webcamRequest = useHome((s) => s.webcamRequest)
   const emit = useHome((s) => s.emit)
+  const lastFace = useHome((s) => s.lastFace)
+  const people = useHome((s) => s.people)
 
   useEffect(() => {
     let cancelled = false
@@ -98,6 +100,27 @@ export default function WebcamTile({
       {status === 'live' && expanded && (
         <div className="pointer-events-none absolute inset-0 opacity-40" style={{ background: 'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.5) 3px)' }} />
       )}
+      {status === 'live' && lastFace?.present && (
+        <FaceBadge personId={lastFace.personId} people={people} />
+      )}
+    </div>
+  )
+}
+
+/** Live KNOWN/UNKNOWN chip on the operator-cam tile — recognition where you look. */
+function FaceBadge({ personId, people }: { personId: string | null; people: { id: string; name: string; color: string }[] }) {
+  const known = personId ? people.find((p) => p.id === personId) : undefined
+  const color = known ? known.color : 'var(--accent-amber)'
+  const label = known ? `KNOWN · ${known.name.toUpperCase()}` : 'UNKNOWN'
+  return (
+    <div
+      className="pointer-events-none absolute right-1.5 top-1.5 flex max-w-[85%] items-center gap-1 border px-1.5 py-0.5"
+      style={{ borderColor: color, background: 'color-mix(in srgb, var(--void) 62%, transparent)' }}
+    >
+      <span className="led-pulse h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color, boxShadow: `0 0 5px ${color}` }} />
+      <span className="num truncate text-[9px] tracking-wide" style={{ color }}>
+        {label}
+      </span>
     </div>
   )
 }

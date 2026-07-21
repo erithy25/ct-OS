@@ -23,10 +23,14 @@ const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model'
 
 /**
  * Euclidean distance in the 128-d descriptor space below which two faces are
- * treated as the same person. 0.5 is the community-standard operating point
- * for face-api descriptors — low false-accept, forgiving of lighting/pose.
+ * treated as the same person. 0.6 is the reference operating point baked into
+ * face-api's own FaceMatcher — it recognises the SAME person across everyday
+ * variation in lighting, distance and pose while keeping false-accepts low.
+ * (We were previously at 0.5, which was strict enough to reject a genuinely
+ * enrolled person on a slightly different frame — the classic "it doesn't
+ * recognise me" symptom.)
  */
-export const MATCH_THRESHOLD = 0.5
+export const MATCH_THRESHOLD = 0.6
 
 /** Detector tuning — modest input size keeps the ~2Hz watch loop light. */
 const DETECT_INPUT_SIZE = 320
@@ -144,14 +148,12 @@ export interface MatchResult {
 
 /**
  * Nearest enrolled person to a descriptor by Euclidean distance across ALL of
- * that person's stored samples. Returns null when the best distance exceeds
- * the threshold (→ UNKNOWN) or nobody is enrolled. Pure + synchronous.
+ * that person's stored samples — REGARDLESS of the threshold. Returns null only
+ * when nobody is enrolled (or no sample has the right dimensionality). Pure +
+ * synchronous. The live readout uses this to show the closest candidate and its
+ * distance even when it's still "unknown", so recognition is observable.
  */
-export function bestMatch(
-  descriptor: Float32Array | number[],
-  people: Person[],
-  threshold: number = MATCH_THRESHOLD,
-): MatchResult | null {
+export function nearest(descriptor: Float32Array | number[], people: Person[]): MatchResult | null {
   let best: MatchResult | null = null
   for (const p of people) {
     for (const sample of p.descriptors) {
@@ -160,8 +162,20 @@ export function bestMatch(
       if (best === null || dist < best.distance) best = { personId: p.id, distance: dist }
     }
   }
-  if (best === null || best.distance > threshold) return null
   return best
+}
+
+/**
+ * Nearest enrolled person within the match threshold (→ KNOWN), or null when
+ * the closest candidate is still too far (→ UNKNOWN) or nobody is enrolled.
+ */
+export function bestMatch(
+  descriptor: Float32Array | number[],
+  people: Person[],
+  threshold: number = MATCH_THRESHOLD,
+): MatchResult | null {
+  const near = nearest(descriptor, people)
+  return near !== null && near.distance <= threshold ? near : null
 }
 
 /** Euclidean distance between two equal-length numeric vectors. */

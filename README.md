@@ -40,11 +40,23 @@ Requires Node ≥ 20, pnpm, and **ffmpeg** for bridging IP cameras (`brew instal
 First run of detection downloads the CV models once (cached); without them it degrades to a
 clear `DETECTION OFFLINE` badge and the rest of the app keeps working.
 
+You need **two terminal tabs**, both inside the cloned repo folder, each running one
+long-lived process. Run each command on its own line — don't paste the `# …` comments.
+
 ```sh
+# one-time, in the repo folder:
 pnpm install
-pnpm server      # the HOMEWATCH server on http://127.0.0.1:8787  (cameras + status)
-pnpm dev         # the cockpit on http://localhost:5173
+
+# ── Terminal tab 1 — the camera/status server (leave it running) ──
+pnpm server        # → http://127.0.0.1:8787  (prints "leave this running")
+
+# ── Terminal tab 2 — the cockpit UI (leave it running too) ──
+pnpm dev           # → http://localhost:5173
 ```
+
+If the cockpit shows **SERVER OFFLINE**, tab 1 isn't running — start `pnpm server` and keep
+it open. The server is intentionally tiny (no database, no native add-ons), so it starts
+instantly and can't be blocked by a build step.
 
 Open `http://localhost:5173`, allow camera access for CAM-01 (your webcam), then
 **+ ADD CAMERA** and paste an IP-camera URL:

@@ -8,6 +8,7 @@ import {
   computeDescriptor,
   faceState,
   loadFace,
+  MATCH_THRESHOLD,
   onFaceState,
   retryFace,
   toStored,
@@ -78,6 +79,9 @@ export default function People() {
         <EngineChip engine={engine} />
       </div>
 
+      {/* live recognition — shows the operator cam read in real time */}
+      <LiveRecognition engine={engine} />
+
       {/* body: enroll (left) + roster (right) */}
       <div className="flex min-h-0 flex-1 gap-2">
         <EnrollPanel engine={engine} />
@@ -110,10 +114,102 @@ function EngineChip({ engine }: { engine: FaceState }) {
   )
 }
 
+/* ── LIVE RECOGNITION strip ─────────────────────────────────────────── */
+
+/**
+ * Shows, in real time, what the operator cam currently reads: KNOWN (with the
+ * matched name + distance), UNKNOWN (with the closest candidate so you can see
+ * you're "almost" matched), NO FACE, or the engine's loading/offline state.
+ * Fed by the background face watch via `store.lastFace` — this is the visible
+ * proof that recognition is working.
+ */
+function LiveRecognition({ engine }: { engine: FaceState }) {
+  const lastFace = useHome((s) => s.lastFace)
+  const people = useHome((s) => s.people)
+
+  let color = 'var(--text-faint)'
+  let dotColor = 'var(--text-faint)'
+  let pulse = false
+  let title = 'INITIALIZING…'
+  let detail = ''
+  let tag = 'STANDBY'
+
+  if (engine === 'offline') {
+    color = 'var(--accent-red)'
+    dotColor = 'var(--accent-red)'
+    title = 'FACE ENGINE OFFLINE'
+    detail = 'ON-DEVICE MODEL UNAVAILABLE — LIVE MATCHING PAUSED'
+    tag = 'OFFLINE'
+  } else if (engine !== 'ready') {
+    color = 'var(--accent-amber)'
+    dotColor = 'var(--accent-amber)'
+    pulse = true
+    title = 'FACE ENGINE LOADING…'
+    detail = 'FETCHING ON-DEVICE MODELS (ONE-TIME)'
+    tag = 'LOADING'
+  } else if (!lastFace || !lastFace.present) {
+    color = 'var(--text-dim)'
+    dotColor = 'var(--text-faint)'
+    title = 'NO FACE IN FRAME'
+    detail = 'CENTER A FACE IN THE OPERATOR CAM · GOOD, EVEN LIGHT'
+    tag = 'SCANNING'
+  } else if (lastFace.personId) {
+    const p = people.find((x) => x.id === lastFace.personId)
+    color = p?.color || 'var(--accent-green)'
+    dotColor = color
+    pulse = true
+    title = `KNOWN · ${(p?.name || 'MEMBER').toUpperCase()}`
+    detail =
+      lastFace.distance != null
+        ? `MATCH ${lastFace.distance.toFixed(2)} ≤ ${MATCH_THRESHOLD.toFixed(2)} THRESHOLD`
+        : 'MATCHED ENROLLED MEMBER'
+    tag = 'KNOWN'
+  } else {
+    // face present, no match within threshold → UNKNOWN
+    color = 'var(--accent-amber)'
+    dotColor = 'var(--accent-amber)'
+    pulse = true
+    title = 'UNKNOWN PERSON'
+    tag = 'UNKNOWN'
+    if (lastFace.distance == null) {
+      detail = people.length === 0 ? 'ENROLL A HOUSEHOLD MEMBER TO START MATCHING' : 'NO MATCH'
+    } else {
+      const nearP = lastFace.nearestId ? people.find((x) => x.id === lastFace.nearestId) : undefined
+      detail = `CLOSEST ${(nearP?.name || '?').toUpperCase()} AT ${lastFace.distance.toFixed(2)} · NEED ≤ ${MATCH_THRESHOLD.toFixed(
+        2,
+      )} — ADD A SAMPLE`
+    }
+  }
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-2.5 border px-2.5 py-1.5"
+      style={{
+        borderColor: `color-mix(in srgb, ${color} 40%, transparent)`,
+        background: `color-mix(in srgb, ${color} 7%, transparent)`,
+      }}
+    >
+      <span
+        className={`h-2 w-2 shrink-0 rounded-full ${pulse ? 'led-pulse' : ''}`}
+        style={{ background: dotColor, boxShadow: `0 0 6px ${dotColor}` }}
+      />
+      <span className="lbl shrink-0" style={{ color }}>
+        {tag}
+      </span>
+      <span className="truncate text-[12px] font-medium tracking-wide" style={{ color }}>
+        {title}
+      </span>
+      <div className="flex-1" />
+      <span className="lbl-faint hidden truncate text-right sm:block">{detail}</span>
+    </div>
+  )
+}
+
 /* ── ENROLL panel ──────────────────────────────────────────────────── */
 
 function EnrollPanel({ engine }: { engine: FaceState }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const fileRef = useRef<HTMLInputElement | null>(null)
   const [camState, setCamState] = useState<CamState>('connecting')
   const [camError, setCamError] = useState<string>('')
   const [camNonce, setCamNonce] = useState(0)
@@ -172,6 +268,39 @@ function EnrollPanel({ engine }: { engine: FaceState }) {
     }
     setSamples((s) => [...s, toStored(d)])
     flash(`SAMPLE ${samples.length + 1}/${MAX_SAMPLES} CAPTURED`, true)
+  }
+
+  // enroll from existing photos — works even if the webcam is unavailable
+  const addFromFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0 || engine !== 'ready') return
+    const slots = MAX_SAMPLES - samples.length
+    if (slots <= 0) {
+      flash('SAMPLE LIMIT REACHED — CLEAR FIRST', false)
+      return
+    }
+    setCapturing(true)
+    let added = 0
+    let sawFile = false
+    for (const file of Array.from(files).slice(0, slots)) {
+      if (!file.type.startsWith('image/')) continue
+      sawFile = true
+      const url = URL.createObjectURL(file)
+      try {
+        const img = new Image()
+        img.src = url
+        await img.decode().catch(() => undefined)
+        const d = await computeDescriptor(img)
+        if (d) {
+          setSamples((s) => [...s, toStored(d)])
+          added++
+        }
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+    }
+    setCapturing(false)
+    if (added > 0) flash(`ADDED ${added} SAMPLE${added > 1 ? 'S' : ''} FROM PHOTO${added > 1 ? 'S' : ''}`, true)
+    else flash(sawFile ? 'NO CLEAR FACE FOUND IN PHOTO' : 'PICK AN IMAGE FILE', false)
   }
 
   const enroll = () => {
@@ -283,11 +412,34 @@ function EnrollPanel({ engine }: { engine: FaceState }) {
               </div>
             </div>
 
+            {/* enroll from existing photos — no webcam required */}
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={engine !== 'ready' || samples.length >= MAX_SAMPLES || capturing}
+              className="lbl border border-lineb px-2 py-1.5 text-dim transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:border-line disabled:text-faint"
+            >
+              ⬆ ADD FROM PHOTO{samples.length > 0 ? ' · MORE ANGLES' : ''}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                void addFromFiles(e.target.files)
+                e.target.value = ''
+              }}
+            />
+
             {samples.length > 0 && (
               <button onClick={() => setSamples([])} className="lbl-faint self-start hover:text-red">
                 ✕ CLEAR SAMPLES
               </button>
             )}
+            <div className="lbl-faint leading-4 text-dim">
+              TIP · 2–3 SAMPLES FROM SLIGHTLY DIFFERENT ANGLES RECOGNISE FAR MORE RELIABLY · CAPTURE LIVE OR ADD PHOTOS
+            </div>
 
             {/* name */}
             <div>

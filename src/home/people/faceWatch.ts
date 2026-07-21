@@ -15,7 +15,7 @@
  * OFFLINE the loop simply idles (still decaying presence) until it recovers.
  */
 import { useHome, WEBCAM_ID } from '../store'
-import { bestMatch, computeDescriptor, faceState, loadFace, onFaceState } from './faceEngine'
+import { computeDescriptor, faceState, loadFace, MATCH_THRESHOLD, nearest, onFaceState } from './faceEngine'
 
 /* ── tunables ──────────────────────────────────────────────────────── */
 
@@ -127,23 +127,43 @@ async function step(): Promise<void> {
   // presence decays regardless of engine/camera health
   decayPresence()
 
-  if (faceState() !== 'ready') return
+  const st = useHome.getState()
+
+  if (faceState() !== 'ready') {
+    st.reportFace(null)
+    return
+  }
+  // if the hidden frame source isn't live yet, (re)acquire it — this recovers
+  // the case where camera permission was granted after the watch first started.
   const v = video
-  if (!v || v.readyState < 2 || v.videoWidth === 0) return
-
-  const people = useHome.getState().people
-  const descriptor = await computeDescriptor(v)
-  if (!descriptor) return // no face in frame
-
-  if (people.length === 0) {
-    // a face is present but nobody is enrolled to match against → UNKNOWN
-    emitUnknown()
+  if (!v || v.readyState < 2 || v.videoWidth === 0) {
+    st.reportFace(null)
+    void initWebcam()
     return
   }
 
-  const match = bestMatch(descriptor, people)
-  if (match) markPresent(match.personId)
-  else emitUnknown()
+  const descriptor = await computeDescriptor(v)
+  if (!descriptor) {
+    // engine ready + camera live, but no face in the frame
+    st.reportFace({ ts: Date.now(), present: false, personId: null, nearestId: null, distance: null })
+    return
+  }
+
+  const people = useHome.getState().people
+  const near = nearest(descriptor, people)
+  const matched = near !== null && near.distance <= MATCH_THRESHOLD ? near : null
+
+  // publish the live read so PEOPLE can SHOW recognition happening in real time
+  useHome.getState().reportFace({
+    ts: Date.now(),
+    present: true,
+    personId: matched?.personId ?? null,
+    nearestId: near?.personId ?? null,
+    distance: near?.distance ?? null,
+  })
+
+  if (matched) markPresent(matched.personId)
+  else emitUnknown() // KNOWN-vs-UNKNOWN only — never a stronger label
 }
 
 async function tick(): Promise<void> {
