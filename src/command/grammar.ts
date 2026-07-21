@@ -157,7 +157,7 @@ export const COMMANDS: readonly CommandSpecEntry[] = [
   { verb: 'help', syntax: 'help', hint: 'FULL COMMAND REFERENCE', nullary: true },
 ]
 
-const VIEWS = ['map', 'grid', 'graph', 'infra', 'ops'] as const
+const VIEWS = ['map', 'grid', 'graph', 'infra', 'ops', 'markets'] as const
 
 const VIEW_LABELS: Record<ViewId, string> = {
   map: 'TACTICAL MAP',
@@ -165,6 +165,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   graph: 'PROFILER',
   infra: 'INFRASTRUCTURE',
   ops: 'OPS DECK',
+  markets: 'MARKET OPS',
 }
 
 function isView(v: string): v is ViewId {

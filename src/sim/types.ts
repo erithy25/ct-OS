@@ -13,7 +13,7 @@ export interface Vec2 {
 /** "SECTOR-1" .. "SECTOR-9" */
 export type SectorId = string
 
-export type ViewId = 'map' | 'grid' | 'graph' | 'infra' | 'ops'
+export type ViewId = 'map' | 'grid' | 'graph' | 'infra' | 'ops' | 'markets'
 
 /* ── entities ──────────────────────────────────────────────────────── */
 
@@ -290,6 +290,29 @@ export interface RealTelemetry {
   host?: RealMetrics
 }
 
+/* ── markets (Phase 2: the finance/market-ops domain layer) ─────────── */
+
+/** A tradable instrument. `source:'live'` = real exchange data (server feed);
+ *  `source:'sim'` = deterministic local simulation (worker/inline mode). */
+export interface Instrument {
+  symbol: string
+  name: string
+  price: number
+  /** % change vs the 24h open (live) or session open (sim) */
+  changePct: number
+  high: number
+  low: number
+  /** 24h base volume */
+  volume: number
+  bid: number
+  ask: number
+  source: 'live' | 'sim'
+  /** wall-clock ms of the last update */
+  updated: number
+  /** recent price points — seeded in hello, accumulated client-side */
+  spark?: number[]
+}
+
 /* ── analytics ─────────────────────────────────────────────────────── */
 
 export interface Vitals {
@@ -402,6 +425,12 @@ export interface SimStore {
   linkMode: 'sim' | 'remote'
   /** Phase 1 real-data feed: latest genuine telemetry overlaid onto the world */
   realTelemetry: RealTelemetry
+  /** Phase 2 market-ops layer: live/simulated instruments */
+  instruments: Instrument[]
+  /** 0..100 aggregate market stress (volatility + drawdown) */
+  marketStress: number
+  /** are ANY instruments backed by real exchange data */
+  marketSource: 'live' | 'sim'
 
   setBooted(b: boolean): void
   setView(v: ViewId): void

@@ -17,6 +17,7 @@ import type {
   EventChannel,
   Histories,
   InfraState,
+  Instrument,
   SectorId,
   Severity,
   SimEntity,
@@ -26,6 +27,7 @@ import type {
 } from './types'
 import { createWorld, nightAt } from './world'
 import { DEFAULT_SEED } from './cityGen'
+import { SPARK_LEN } from './markets'
 import {
   PF_MOVING,
   PF_TRACKED,
@@ -183,6 +185,9 @@ export const useSim = create<SimStore>((set, get) => {
     linkUp: false,
     linkMode: 'sim',
     realTelemetry: {},
+    instruments: [],
+    marketStress: 0,
+    marketSource: 'sim',
 
     setBooted: (b) => set({ booted: b }),
     setView: (v) => set({ view: v }),
@@ -318,6 +323,9 @@ function applyHello(h: HelloMsg): void {
     threatBoard: d.threatBoard,
     analystNote: d.analystNote,
     realTelemetry: d.realTelemetry ?? {},
+    instruments: h.instruments ?? [],
+    marketStress: d.marketStress ?? 0,
+    marketSource: d.marketSource ?? 'sim',
     vitalsVersion: s.vitalsVersion + 1,
     eventsVersion: s.eventsVersion + 1,
   }))
@@ -416,11 +424,14 @@ function applyTick(t: TickMsg): void {
     detectionsPerMin: d.detectionsPerMin,
     incidentsActive: d.incidentsActive,
     camerasOnline: d.camerasOnline,
+    marketStress: d.marketStress ?? 0,
+    marketSource: d.marketSource ?? 'sim',
   }
   if (t.tick % 5 === 0) {
     patch.vitalsVersion = useSim.getState().vitalsVersion + 1
     patch.realTelemetry = d.realTelemetry ?? {}
   }
+  if (t.instruments) patch.instruments = mergeInstruments(useSim.getState().instruments, t.instruments)
   if (t.events.length > 0) patch.eventsVersion = useSim.getState().eventsVersion + 1
   if (t.infra) patch.infra = t.infra
   if (d.hotspotsRev !== lastHotspotsRev) {
@@ -436,6 +447,17 @@ function applyTick(t: TickMsg): void {
     patch.analystNote = d.analystNote
   }
   useSim.setState(patch)
+}
+
+/** merge streamed instrument scalars into the store, accumulating spark client-side */
+function mergeInstruments(prev: Instrument[], incoming: Instrument[]): Instrument[] {
+  const bySym = new Map(prev.map((i) => [i.symbol, i]))
+  return incoming.map((inc) => {
+    const old = bySym.get(inc.symbol)
+    const spark = old?.spark ? old.spark.slice(-(SPARK_LEN - 1)) : []
+    spark.push(inc.price)
+    return { ...inc, spark }
+  })
 }
 
 const sink: SourceSink = {

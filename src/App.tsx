@@ -13,13 +13,14 @@ import { getEvents, startSimLoop, useSim } from './sim/store'
 import type { ViewId } from './sim/types'
 import { alertTone, uiSwitch } from './lib/audio'
 
-const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph', '4': 'infra', '5': 'ops' }
+const VIEW_KEYS: Record<string, ViewId> = { '1': 'map', '2': 'grid', '3': 'graph', '4': 'infra', '5': 'ops', '6': 'markets' }
 
 const TacticalMap = lazy(() => import('./modules/map/TacticalMap'))
 const OpsDeck = lazy(() => import('./modules/ops/OpsDeck'))
 const InfrastructureControl = lazy(() => import('./modules/infra/InfrastructureControl'))
 const RelationshipGraph = lazy(() => import('./modules/graph/RelationshipGraph'))
 const SurveillanceGrid = lazy(() => import('./modules/surveil/SurveillanceGrid'))
+const MarketsDeck = lazy(() => import('./modules/markets/MarketsDeck'))
 
 function CenterStage({ view }: { view: ViewId }) {
   switch (view) {
@@ -33,6 +34,8 @@ function CenterStage({ view }: { view: ViewId }) {
       return <InfrastructureControl />
     case 'ops':
       return <OpsDeck />
+    case 'markets':
+      return <MarketsDeck />
   }
 }
 

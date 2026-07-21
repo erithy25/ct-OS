@@ -80,6 +80,44 @@ describe('EngineHost', () => {
     expect(withFeed).toBeGreaterThan(noFeed)
   })
 
+  it('carries a simulated market that moves and reports stress', () => {
+    const host = new EngineHost(DEFAULT_SEED)
+    const h = host.hello()
+    expect(h.instruments.length).toBe(12)
+    expect(h.instruments.every((i) => i.source === 'sim')).toBe(true)
+    const btc0 = h.instruments.find((i) => i.symbol === 'BTC')!
+    expect(btc0.price).toBeGreaterThan(1000)
+    expect(h.derived.marketSource).toBe('sim')
+
+    let lastInstr = h.instruments
+    let lastStress = 0
+    for (let i = 0; i < 20; i++) {
+      const t = host.tick()
+      if (t.instruments) lastInstr = t.instruments
+      lastStress = t.derived.marketStress
+    }
+    expect(typeof lastStress).toBe('number')
+    // deterministic sim actually moves prices
+    const btcNow = lastInstr.find((i) => i.symbol === 'BTC')!
+    expect(btcNow.price).not.toBe(btc0.price)
+    host.dispose()
+  })
+
+  it('injectMarket overlays real quotes and flips the source to live', () => {
+    const host = new EngineHost(DEFAULT_SEED)
+    host.tick()
+    host.injectMarket([
+      { symbol: 'BTC', price: 70123.45, changePct: 5.5, high: 71000, low: 64000, volume: 1234.5, bid: 70120, ask: 70127 },
+    ])
+    const t = host.tick()
+    const btc = t.instruments!.find((i) => i.symbol === 'BTC')!
+    expect(btc.source).toBe('live')
+    expect(btc.price).toBe(70123.45)
+    expect(t.derived.marketSource).toBe('live')
+    expect(t.events.some((e) => e.channel === 'FEED' && e.message.includes('MARKET DATA LIVE'))).toBe(true)
+    host.dispose()
+  })
+
   it('is deterministic: same seed → identical positions after N ticks', () => {
     const a = new EngineHost(DEFAULT_SEED)
     let ta: TickMsg | null = null

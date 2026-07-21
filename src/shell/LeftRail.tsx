@@ -39,6 +39,12 @@ const ICONS: Record<ViewId, ReactNode> = {
       <path d="M10.5 4H13v2.5" />
     </svg>
   ),
+  markets: (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <path d="M2 12.5 5 8l2.5 2.5L10 5l1.6 2M2.2 3v10.5h11.6" />
+      <path d="M11 4.5h2.5V7" strokeLinejoin="round" />
+    </svg>
+  ),
 }
 
 const NAV: { id: ViewId; label: string; key: string }[] = [
@@ -47,6 +53,7 @@ const NAV: { id: ViewId; label: string; key: string }[] = [
   { id: 'graph', label: 'PROFILER', key: '3' },
   { id: 'infra', label: 'INFRASTRUCTURE', key: '4' },
   { id: 'ops', label: 'OPS DECK', key: '5' },
+  { id: 'markets', label: 'MARKET OPS', key: '6' },
 ]
 
 export default function LeftRail() {

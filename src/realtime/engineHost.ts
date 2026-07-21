@@ -7,10 +7,20 @@
  * serialises everything into the wire protocol. It touches NO browser API,
  * so node can import it directly.
  */
-import type { Histories, InfraState, PatrolUnit, RealMetrics, RealTelemetry, SectorId, World } from '../sim/types'
+import type { Histories, InfraState, Instrument, PatrolUnit, RealMetrics, RealTelemetry, SectorId, World } from '../sim/types'
 import { advanceWorld, createWorld, getWorldDerived, type WorldInputs } from '../sim/world'
 import { DEFAULT_SEED } from '../sim/cityGen'
 import { emitEvent, onEvent } from '../sim/events'
+import {
+  createInstruments,
+  createMarketSim,
+  marketStressOf,
+  roundPrice,
+  SPARK_LEN,
+  stepMarketSim,
+  type MarketSimState,
+} from '../sim/markets'
+import type { MarketQuote } from './protocol'
 import {
   PF_MOVING,
   PF_TRACKED,
@@ -76,6 +86,12 @@ export class EngineHost implements EngineHostApi {
   private metricsHost: RealMetrics | null = null
   private feedEventAt = -1e9
   private feedSeen = { client: false, host: false }
+  /** Phase 2 markets */
+  private instruments: Instrument[]
+  private marketSim: MarketSimState
+  private marketLive = false
+  private marketDirty = false
+  private lastVolEventAt = -1e9
 
   constructor(seed: number = DEFAULT_SEED, opts: EngineHostOpts = {}) {
     this.seed = seed
@@ -83,6 +99,8 @@ export class EngineHost implements EngineHostApi {
     this.infra = defaultInfra(this.world)
     this.histories = opts.seedHistories ? { ...emptyHistories(), ...structuredCloneSafe(opts.seedHistories) } : emptyHistories()
     this.recent = opts.seedEvents ? opts.seedEvents.slice(-RECENT_EVENTS) : []
+    this.instruments = createInstruments(seed, Date.now())
+    this.marketSim = createMarketSim(seed, this.instruments)
 
     // capture engine emissions into the pending buffer, tagged with sim time
     this.offEvent = onEvent((severity, channel, message, sector, entityId) => {
@@ -147,6 +165,8 @@ export class EngineHost implements EngineHostApi {
       threatRev: d.threatRev,
       noteRev: d.noteRev,
       realTelemetry: this.realTelemetry(),
+      marketStress: marketStressOf(this.instruments),
+      marketSource: this.marketLive ? 'live' : 'sim',
     }
   }
 
@@ -180,6 +200,7 @@ export class EngineHost implements EngineHostApi {
       infra: cloneInfra(this.infra),
       histories: structuredCloneSafe(this.histories),
       recentEvents: this.recent.slice(),
+      instruments: structuredCloneSafe(this.instruments),
       derived: this.toDerivedWire(),
     }
     // the snapshot's recentEvents already covers everything so far; drop the
@@ -192,6 +213,7 @@ export class EngineHost implements EngineHostApi {
   tick(): TickMsg {
     this.inputs.defconOverride = this.inputs.defconOverride ?? null
     advanceWorld(this.world, this.infra, this.inputs)
+    this.stepMarket()
     const w = this.world
 
     const nP = w.persons.length
@@ -283,7 +305,75 @@ export class EngineHost implements EngineHostApi {
       msg.infra = cloneInfra(this.infra)
       this.infraDirty = false
     }
+    // stream instrument scalars (no spark) at 2 Hz, or promptly after an inject
+    if (w.tick % 5 === 0 || this.marketDirty) {
+      msg.instruments = this.instruments.map((i) => ({ ...i, spark: undefined }))
+      this.marketDirty = false
+    }
     return msg
+  }
+
+  /** advance the local market simulator; real (live) instruments are untouched */
+  private stepMarket(): void {
+    const now = Date.now()
+    // 1 sim-minute per 6 ticks → dtSec of sim time per tick
+    const dtSec = (1 / 6) * 60
+    const maxMove = stepMarketSim(this.marketSim, this.instruments, dtSec)
+    for (const inst of this.instruments) {
+      if (inst.source === 'sim') inst.updated = now
+      const spark = inst.spark ?? (inst.spark = [])
+      spark.push(inst.price)
+      if (spark.length > SPARK_LEN) spark.shift()
+    }
+    // volatility alert on a sharp simulated step (real moves alert on inject)
+    if (maxMove > 0.02 && this.world.tick - this.lastVolEventAt > 80) {
+      this.lastVolEventAt = this.world.tick
+      const mover = this.instruments
+        .filter((i) => i.source === 'sim')
+        .reduce((a, b) => (Math.abs(b.changePct) > Math.abs(a.changePct) ? b : a))
+      this.emitVolEvent(mover)
+    }
+  }
+
+  private emitVolEvent(inst: Instrument): void {
+    const dir = inst.changePct >= 0 ? '▲' : '▼'
+    const sev = Math.abs(inst.changePct) >= 6 ? 'CRIT' : 'WARN'
+    emitEvent(sev, 'FEED', `${inst.symbol} ${dir} ${inst.changePct.toFixed(2)}% · VOLATILITY ${sev === 'CRIT' ? 'SHOCK' : 'SPIKE'} · ${inst.source.toUpperCase()}`)
+  }
+
+  /** overlay real exchange quotes onto matching instruments */
+  injectMarket(quotes: MarketQuote[]): void {
+    const now = Date.now()
+    let firstLive = false
+    for (const q of quotes) {
+      const inst = this.instruments.find((i) => i.symbol === q.symbol)
+      if (!inst) continue
+      const wasSim = inst.source === 'sim'
+      const prevPct = inst.changePct
+      inst.price = roundPrice(q.price)
+      inst.changePct = q.changePct
+      inst.high = roundPrice(q.high)
+      inst.low = roundPrice(q.low)
+      inst.volume = q.volume
+      inst.bid = roundPrice(q.bid)
+      inst.ask = roundPrice(q.ask)
+      inst.source = 'live'
+      inst.updated = now
+      const spark = inst.spark ?? (inst.spark = [])
+      spark.push(inst.price)
+      if (spark.length > SPARK_LEN) spark.shift()
+      if (wasSim) firstLive = true
+      // alert on a real intraday swing crossing a threshold
+      if (Math.abs(q.changePct) >= 4 && Math.abs(prevPct) < 4 && this.world.tick - this.lastVolEventAt > 40) {
+        this.lastVolEventAt = this.world.tick
+        this.emitVolEvent(inst)
+      }
+    }
+    if (quotes.length > 0) {
+      this.marketLive = true
+      this.marketDirty = true
+    }
+    if (firstLive) emitEvent('NOTICE', 'FEED', `MARKET DATA LIVE · ${quotes.length} INSTRUMENTS · REAL EXCHANGE FEED`)
   }
 
   private pushHistories(d: DerivedWire): void {

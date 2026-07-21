@@ -22,6 +22,7 @@ import type {
   InfraState,
   IncidentPhase,
   IncidentType,
+  Instrument,
   RealMetrics,
   RealTelemetry,
   SectorId,
@@ -125,6 +126,10 @@ export interface DerivedWire {
   noteRev: number
   /** Phase 1 real telemetry overlaid onto the wire derived (empty if no feed) */
   realTelemetry: RealTelemetry
+  /** Phase 2 aggregate market stress, 0..100 */
+  marketStress: number
+  /** are ANY instruments backed by real exchange data */
+  marketSource: 'live' | 'sim'
 }
 
 /* ── messages: producer → client ───────────────────────────────────── */
@@ -145,6 +150,8 @@ export interface HelloMsg {
   histories: Histories
   /** recent ring-buffer tail to seed the alert feed / event log */
   recentEvents: WireEvent[]
+  /** Phase 2 instrument snapshot (with seeded spark history) */
+  instruments: Instrument[]
   derived: DerivedWire
 }
 
@@ -180,6 +187,8 @@ export interface TickMsg {
   events: WireEvent[]
   /** present only on ticks where a command changed infra state (ack) */
   infra?: InfraState
+  /** Phase 2 instrument scalars (no spark); present every few ticks */
+  instruments?: Instrument[]
 }
 
 export type ServerMsg = HelloMsg | TickMsg
@@ -248,12 +257,26 @@ export interface WorldSource {
  *     .infra: InfraState          — authoritative infra (read-only use)
  *     .dispose(): void            — release the events-bus subscription
  */
+/** A real exchange quote injected server-side by the market feed. */
+export interface MarketQuote {
+  symbol: string
+  price: number
+  changePct: number
+  high: number
+  low: number
+  volume: number
+  bid: number
+  ask: number
+}
+
 export interface EngineHostApi {
   readonly world: import('../sim/types').World
   readonly infra: InfraState
   hello(): HelloMsg
   tick(): TickMsg
   command(cmd: SourceCommand): void
+  /** overlay real exchange quotes onto matching instruments (host-side feed) */
+  injectMarket(quotes: MarketQuote[]): void
   dispose(): void
 }
 

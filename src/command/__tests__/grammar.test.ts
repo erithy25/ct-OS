@@ -341,7 +341,7 @@ describe('complete — suggestion contexts', () => {
 
   it('goto completes views', () => {
     const out = complete('goto ', cctx())
-    expect(out.map((s) => s.label)).toEqual(['map', 'grid', 'graph', 'infra', 'ops'])
+    expect(out.map((s) => s.label)).toEqual(['map', 'grid', 'graph', 'infra', 'ops', 'markets'])
     expect(out[0].insert).toBe('goto map')
     expect(out[0].type).toBe('view')
   })
