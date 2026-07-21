@@ -21,6 +21,9 @@ import { config } from './config'
 import { Persistence } from './persistence'
 import { startHostFeed } from './hostFeed'
 import { startMarketFeed } from './marketFeed'
+import { CameraManager, probeFfmpeg } from './realworld/cameras'
+import { makeRouter, route } from './realworld/router'
+import type { RealworldStatus } from '../../src/realworld/contract'
 
 /* ── command validation (zod mirror of SourceCommand) ──────────────── */
 
@@ -96,33 +99,63 @@ function warn(msg: string, err?: unknown): void {
   else console.warn(`[server] ${msg}`)
 }
 
+/* ── HOMEWATCH real-world API (/api/*) ─────────────────────────────── */
+
+const cameras = new CameraManager(warn)
+let ffmpegProbe: { ok: boolean; version?: string } = { ok: false }
+void probeFfmpeg().then((r) => {
+  ffmpegProbe = r
+  console.log(`[server] ffmpeg ${r.ok ? `ready (${r.version ?? '?'})` : 'NOT FOUND — cameras need it (brew install ffmpeg)'}`)
+})
+
+const statusRoute = route('GET', '/api/realworld/status', (c) => {
+  const status: RealworldStatus = {
+    ok: true,
+    ffmpeg: ffmpegProbe.ok,
+    ffmpegVersion: ffmpegProbe.version,
+    cameras: cameras.count,
+    devices: { backend: 'none', connected: false, count: 0 },
+    geo: { defaultCity: 'PENDING', feeds: true },
+    uptime: Math.round((Date.now() - startedAt) / 1000),
+  }
+  c.json(200, status)
+})
+
+const realworldRouter = makeRouter([statusRoute, ...cameras.routes()], warn)
+
 /* ── http + health ─────────────────────────────────────────────────── */
 
 const server = http.createServer((req, res) => {
-  try {
-    const path = (req.url ?? '').split('?')[0]
-    if (req.method === 'GET' && path === '/health') {
-      const body = JSON.stringify({
-        ok: true,
-        tick: host.world.tick,
-        clients: clients.size,
-        uptime: Math.round((Date.now() - startedAt) / 1000),
-      })
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(body)
-      return
-    }
-    res.writeHead(404, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: false, error: 'not found' }))
-  } catch (err) {
-    warn('http handler error', err)
+  void (async () => {
     try {
-      res.writeHead(500)
-      res.end()
-    } catch {
-      /* socket already gone */
+      const path = (req.url ?? '').split('?')[0]
+      if (req.method === 'GET' && path === '/health') {
+        const body = JSON.stringify({
+          ok: true,
+          tick: host.world.tick,
+          clients: clients.size,
+          cameras: cameras.count,
+          uptime: Math.round((Date.now() - startedAt) / 1000),
+        })
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(body)
+        return
+      }
+      // HOMEWATCH real-world endpoints
+      if (await realworldRouter(req, res)) return
+
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'not found' }))
+    } catch (err) {
+      warn('http handler error', err)
+      try {
+        if (!res.headersSent) res.writeHead(500)
+        res.end()
+      } catch {
+        /* socket already gone */
+      }
     }
-  }
+  })()
 })
 
 server.on('error', (err) => warn('http server error', err))
@@ -242,6 +275,7 @@ function shutdown(signal: string): void {
   clearInterval(tickTimer)
   clearInterval(snapTimer)
   hostFeed.stop()
+  cameras.disposeAll()
   marketFeed.stop()
   persistence.save(host.snapshot(), host.seed)
   persistence.close()

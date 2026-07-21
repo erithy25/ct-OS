@@ -36,7 +36,8 @@ function redact(url: string): string {
 function inputArgs(kind: CameraKind, url: string): string[] {
   switch (kind) {
     case 'test':
-      return ['-f', 'lavfi', '-i', 'testsrc2=size=640x480:rate=12']
+      // -re paces the synthetic source to real time (else ffmpeg floods frames)
+      return ['-re', '-f', 'lavfi', '-i', 'testsrc2=size=640x480:rate=12']
     case 'rtsp':
       return ['-rtsp_transport', 'tcp', '-i', url]
     case 'file':
