@@ -361,6 +361,10 @@ export interface SimStore {
   hotspots: HotspotForecast[]
   analystNote: string
   threatBoard: ThreatEntry[]
+  /** realtime link state (Phase 0 client/server split): is the world source connected */
+  linkUp: boolean
+  /** where the authoritative world runs: 'sim' = local worker/inline, 'remote' = node server */
+  linkMode: 'sim' | 'remote'
 
   setBooted(b: boolean): void
   setView(v: ViewId): void

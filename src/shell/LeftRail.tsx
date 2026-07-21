@@ -56,6 +56,10 @@ export default function LeftRail() {
   const vitalsVersion = useSim((s) => s.vitalsVersion)
   const muted = useSim((s) => s.muted)
   const setMuted = useSim((s) => s.setMuted)
+  const linkUp = useSim((s) => s.linkUp)
+  const linkMode = useSim((s) => s.linkMode)
+  const linkLabel = linkMode === 'remote' ? 'REMOTE' : 'LOCAL'
+  const linkColor = linkMode === 'remote' ? 'var(--accent-violet)' : 'var(--accent-green)'
 
   const h = getHistories()
 
@@ -113,7 +117,19 @@ export default function LeftRail() {
           <span>AUDIO</span>
           <span className={muted ? 'text-faint' : 'text-accent'}>{muted ? 'MUTED' : 'LIVE'}</span>
         </button>
-        <div className="lbl-faint mt-1.5 flex justify-between opacity-60">
+        <div className="lbl-faint mt-1.5 flex items-center justify-between">
+          <span className="flex items-center gap-1">
+            <span
+              className={`inline-block h-1 w-1 rounded-full ${linkUp ? 'led-pulse' : ''}`}
+              style={{ background: linkUp ? linkColor : 'var(--accent-red)', boxShadow: linkUp ? `0 0 5px ${linkColor}` : 'none' }}
+            />
+            LINK
+          </span>
+          <span className="num" style={{ color: linkUp ? linkColor : 'var(--accent-red)' }}>
+            {linkUp ? linkLabel : 'OFFLINE'}
+          </span>
+        </div>
+        <div className="lbl-faint mt-1 flex justify-between opacity-60">
           <span>MESH v5.11</span>
           <span className="num">SEED 0x2F7A</span>
         </div>

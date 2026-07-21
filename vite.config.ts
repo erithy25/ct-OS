@@ -8,6 +8,11 @@ export default defineConfig(({ mode }) => {
   const singlefile = mode === 'singlefile'
   return {
     plugins: [react()],
+    define: {
+      // single-file builds can't serve a separate worker chunk → default to the
+      // inline source so there's no failed worker fetch + fallback delay.
+      __PANOPTICON_SINGLEFILE__: JSON.stringify(singlefile),
+    },
     server: {
       port: 5173,
       strictPort: false,
