@@ -20,6 +20,7 @@ import { isCommandMsg, type SourceCommand } from '../../src/realtime/protocol'
 import { config } from './config'
 import { Persistence } from './persistence'
 import { startHostFeed } from './hostFeed'
+import { startMarketFeed } from './marketFeed'
 
 /* ── command validation (zod mirror of SourceCommand) ──────────────── */
 
@@ -69,6 +70,26 @@ const hostFeed = startHostFeed((metrics) => {
     /* ignore a bad feed sample */
   }
 })
+
+// Phase 2: poll Kraken's public API and overlay REAL crypto quotes onto the world
+const marketFeed: { stop(): void } = config.MARKET_ENABLED
+  ? startMarketFeed(
+      (quotes) => {
+        try {
+          host.injectMarket(quotes)
+        } catch {
+          /* ignore a bad quote batch — the sim keeps running */
+        }
+      },
+      { pollMs: config.MARKET_POLL_SEC * 1000 },
+    )
+  : { stop() {} }
+
+if (config.MARKET_ENABLED) {
+  console.log(`[server] market feed starting · polling Kraken every ${config.MARKET_POLL_SEC}s`)
+} else {
+  console.log('[server] market feed disabled (MARKET_ENABLED=false) — instruments stay simulated')
+}
 
 function warn(msg: string, err?: unknown): void {
   if (err !== undefined) console.warn(`[server] ${msg}:`, err instanceof Error ? err.message : err)
@@ -221,6 +242,7 @@ function shutdown(signal: string): void {
   clearInterval(tickTimer)
   clearInterval(snapTimer)
   hostFeed.stop()
+  marketFeed.stop()
   persistence.save(host.snapshot(), host.seed)
   persistence.close()
   for (const ws of clients) {

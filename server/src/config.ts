@@ -11,6 +11,8 @@
  *   TICK_MS       sim step interval, ms             (default 100 → 10 Hz)
  *   SNAPSHOT_SEC  persistence cadence, seconds      (default 10)
  *   WS_PATH       websocket route                   (default /ws)
+ *   MARKET_ENABLED   poll the real Kraken feed      (default true)
+ *   MARKET_POLL_SEC  Kraken poll cadence, seconds   (default 5)
  */
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,6 +43,17 @@ const flexibleInt = (v: unknown): unknown => {
   return /^[+-]?0x[0-9a-f]+$/i.test(s) ? parseInt(s, 16) : Number(s)
 }
 
+/** accept "true/1/yes/on" or "false/0/no/off" (case-insensitive); blank → undefined */
+const flexibleBool = (v: unknown): unknown => {
+  if (typeof v === 'boolean') return v
+  if (typeof v !== 'string') return v
+  const s = v.trim().toLowerCase()
+  if (s === '') return undefined
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true
+  if (['0', 'false', 'no', 'off'].includes(s)) return false
+  return v
+}
+
 const ConfigSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(DEFAULT_WS_PORT),
   HOST: z.string().min(1).default('127.0.0.1'),
@@ -49,6 +62,8 @@ const ConfigSchema = z.object({
   TICK_MS: z.coerce.number().int().min(1).max(60000).default(100),
   SNAPSHOT_SEC: z.coerce.number().min(1).max(3600).default(10),
   WS_PATH: z.string().startsWith('/').default(DEFAULT_WS_PATH),
+  MARKET_ENABLED: z.preprocess(flexibleBool, z.boolean()).default(true),
+  MARKET_POLL_SEC: z.coerce.number().min(1).max(3600).default(5),
 })
 
 const parsed = ConfigSchema.safeParse(process.env)
@@ -72,6 +87,10 @@ export interface ServerConfig {
   TICK_MS: number
   SNAPSHOT_SEC: number
   WS_PATH: string
+  /** poll the real Kraken market feed (Phase 2) */
+  MARKET_ENABLED: boolean
+  /** Kraken poll cadence, seconds */
+  MARKET_POLL_SEC: number
   ROOT: string
 }
 
@@ -83,5 +102,7 @@ export const config: ServerConfig = {
   TICK_MS: raw.TICK_MS,
   SNAPSHOT_SEC: raw.SNAPSHOT_SEC,
   WS_PATH: raw.WS_PATH,
+  MARKET_ENABLED: raw.MARKET_ENABLED,
+  MARKET_POLL_SEC: raw.MARKET_POLL_SEC,
   ROOT,
 }
