@@ -83,14 +83,35 @@ the vitals just became partly real, plus one clearly-labelled `● REAL` readout
 This is the template for every future feed: implement a sampler, send
 `{ k:'feed' }`, done — the UI never changes.
 
-## Phase 2 — Domain semantics + real map/graph (forks by domain)
+## Phase 2 — Market-ops domain layer ✅ DONE
 
-The world model repoints at a chosen domain. The entity taxonomy
-(person/vehicle/incident/camera) and the map layer become domain-shaped; the
-Gotham/Bloomberg aesthetic stays. Candidate domains: **finance/market ops**
-(instruments, limit breaches, counterparty graph, exposure map — no privacy
-surface), **homelab/infrastructure** (real host & service metrics), or
-**public city data** (GTFS-RT transit, traffic, weather on a real OSM map).
+Chosen domain: **finance / market ops** (on-brand, no privacy surface, real
+keyless data). A market dimension now lives on the same seam — real when the
+server runs, deterministically simulated otherwise, always clearly badged.
+
+- `src/sim/markets.ts` — a 12-instrument crypto/USD basket, a deterministic GBM
+  simulator (worker/inline), the Kraken result-key mapping, and a market-stress
+  index.
+- `EngineHost` holds instruments, steps the sim each tick, accepts real quotes
+  via `injectMarket()` (overlays matching symbols → `source:'live'`), emits
+  volatility events on sharp moves, and exposes `marketStress` / `marketSource`.
+- `server/src/marketFeed.ts` — polls **Kraken's public Ticker API** (keyless,
+  global `fetch`, fully guarded) every 5s and injects real quotes. `?source=remote`
+  shows live exchange prices.
+- `src/modules/markets/` — the **MARKET OPS** center-stage board: sortable
+  12-row live grid with trend sparklines, an instrument-detail chart with
+  range/microstructure, a movers/breadth rail, a market-stress gauge, and
+  `● LIVE · REAL EXCHANGE` / `◐ SIMULATED` honesty everywhere (real volume only
+  when live). Wired into nav (key `6`), `⌘K goto markets`, and the center stage.
+
+Verified end-to-end: worker mode runs the deterministic simulator; remote mode
+streams real Kraken prices (DOT +4.01%, BTC ~$66.5k, real 24h volume). The city
+ops modules remain — this is an additive domain view, not a teardown.
+
+### Not yet (future Phase 2+ ideas)
+Deeper coupling (market stress → DEFCON input), a real OSM basemap for the
+tactical view, a counterparty/exposure graph in the profiler, and equities via a
+keyed feed. The seam makes each of these "add an adapter," not a rewrite.
 
 ## Phase 3 — Harden into a product
 

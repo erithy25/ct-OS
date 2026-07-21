@@ -84,6 +84,7 @@ stress the machine and the city's load rises. Everything else stays simulated fi
 | **PROFILER** | Gotham-style link-analysis graph (d3-force). Pull the thread on any person: associates, phones, vehicles, accounts, locations with typed edges, 1–3 hops, search, and PNG export. Deterministic per entity. |
 | **INFRASTRUCTURE** | Own the city: per-sector power breakers (hold-to-confirm blackout), traffic signal control, metro lines, drawbridges, comms. Consequences are simulated — blackouts kill cameras, snarl traffic, and spike incidents. A SYSTEM INTEGRITY readout warns of cascade risk. |
 | **OPS DECK** | Bloomberg-dense analytics: six live strip charts, a sortable threat board (click through to the profiler), a violet predictive panel with next-hour hotspot forecasts + templated analyst notes, and a virtualized, filterable event-log table. |
+| **MARKET OPS** | A live spot-crypto trading board (the finance-domain layer): 12 instruments, sortable, with trend sparklines, an instrument-detail chart + microstructure, a movers/breadth rail, and a market-stress gauge. Runs a deterministic **simulator** offline; with `pnpm server` it streams **real Kraken prices** — badged `● LIVE` vs `◐ SIMULATED` throughout. |
 
 ## ⌘K command terminal
 
@@ -106,7 +107,7 @@ defcon clear                       return DEFCON to sim-derived
 theme · mute · help                utilities
 ```
 
-Keyboard: `1–5` switch modules · `Esc` closes overlays / deselects · `Esc` during boot skips it.
+Keyboard: `1–6` switch modules · `Esc` closes overlays / deselects · `Esc` during boot skips it.
 Append `?boot=skip` to the URL to skip the boot sequence.
 
 ## How the simulation works
