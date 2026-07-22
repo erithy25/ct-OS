@@ -5,8 +5,10 @@
  * produces — pose landmarks from the operator cam, KNOWN/UNKNOWN person
  * tracks, the face watch's presence flags — into one reactive BrainSnapshot:
  * who is home, what each person is neutrally observed to be doing (SITTING,
- * WALKING…), per-camera occupancy, today's activity segments and a gently
- * learned arrival routine per person.
+ * WALKING…), per-camera occupancy, live observable SITUATIONS (person at the
+ * entry, at / lingering at / crouching next to a vehicle, package at the
+ * entry — via the pure context engine), today's activity segments and a
+ * gently learned arrival routine per person.
  *
  * Awareness, never judgement: activities are plain observations, people are
  * KNOWN or UNKNOWN, and the only "insight" wording is soft and informational.
@@ -15,9 +17,20 @@
  * pose engine is OFFLINE the brain degrades to motion-only MOVING/IDLE.
  */
 import { getTracks, useHome, WEBCAM_ID, type HomeStore } from '../store'
-import type { ActivityKind, ActivitySegment, BrainSnapshot, Person, PersonNow, TrackedBox } from '../types'
+import type {
+  ActivityKind,
+  ActivitySegment,
+  BrainSnapshot,
+  Person,
+  PersonNow,
+  Situation,
+  SituationKind,
+  TrackedBox,
+  Zone,
+} from '../types'
 import { getFaceVideo } from '../people/faceWatch'
 import { ActivitySmoother, classifyInstant, type InstantActivity, type PoseSample } from './classify'
+import { createContextState, detectSituations, type ContextInput } from './context'
 import { detectPose, loadPose, onPoseState, poseState } from './poseEngine'
 import {
   absenceNoteDue,
@@ -44,6 +57,8 @@ const MOVE_SPEED = 0.08
 const MOTION_HOLD_MS = 2000
 /** a track not refreshed within this window is stale (tracker paused/gone) */
 const TRACK_FRESH_MS = 2000
+/** while the pose engine is OFFLINE, retry the model load at most this often */
+const POSE_RETRY_MS = 60_000
 /** snapshot heartbeat — report at least this often even with no change */
 const REPORT_HEARTBEAT_MS = 1500
 /** debounce for the today-segments localStorage write */
@@ -57,6 +72,8 @@ const ACTIVITY_KINDS: ReadonlySet<string> = new Set<ActivityKind>([
   'STANDING',
   'SITTING',
   'WALKING',
+  'RUNNING',
+  'CROUCHING',
   'LYING',
   'WAVING',
   'MOVING',
@@ -102,6 +119,13 @@ let lastFingerprint = ''
 let lastReportAt = 0
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
+/** situation-engine dwell bookkeeping (context.ts), reset on startBrain */
+let contextState = createContextState()
+/** situation id → last kind an event was emitted for (start / upgrade dedupe) */
+const seenSituations = new Map<string, SituationKind>()
+/** last time an OFFLINE pose engine was asked to retry its model load */
+let lastPoseRetryAt = 0
+
 /* ── small helpers ─────────────────────────────────────────────────── */
 
 /** Local calendar day, 'YYYY-MM-DD'. */
@@ -119,6 +143,12 @@ function startOfDayMs(ts: number): number {
 function cameraName(st: HomeStore, cameraId: string): string {
   if (cameraId === WEBCAM_ID) return 'OPERATOR CAM'
   return st.serverCameras.find((c) => c.id === cameraId)?.name ?? cameraId
+}
+
+/** Simple night test matching zoneWatch: local hour 21:00–06:59. */
+function isNight(ts: number): boolean {
+  const hr = new Date(ts).getHours()
+  return hr < 7 || hr > 20
 }
 
 function allCameraIds(st: HomeStore): string[] {
@@ -376,6 +406,100 @@ function runPresenceRoutines(st: HomeStore, now: number): void {
   }
 }
 
+/* ── situations (context engine) ───────────────────────────────────── */
+
+/**
+ * SITUATION → EVENT. Exactly one event when a situation STARTS, plus exactly
+ * one more on the AT_VEHICLE → LINGERING_AT_VEHICLE upgrade. Severity is
+ * calibrated to the KNOWN / UNKNOWN distinction and the wording never claims
+ * more than what was observed; a still-resolving ('PERSON') identity gets the
+ * neutral wording at NOTICE, never the UNKNOWN wording or WARN.
+ */
+function emitSituation(st: HomeStore, s: Situation, now: number): void {
+  const cam = cameraName(st, s.cameraId)
+  const known = s.personId !== null
+  const who = s.personLabel === 'UNKNOWN' ? 'UNKNOWN PERSON' : s.personLabel
+  const opts = { cameraId: s.cameraId, personId: s.personId ?? undefined }
+  switch (s.kind) {
+    case 'AT_ENTRY':
+      if (known) st.emit('INFO', 'ZONE', `${who} AT ENTRY · ${cam}`, opts)
+      else st.emit('NOTICE', 'ZONE', `${who} AT ENTRY — MAY BE RINGING · ${cam}`, opts)
+      return
+    case 'AT_VEHICLE':
+      st.emit(known ? 'INFO' : 'NOTICE', 'ACTIVITY', `${who} AT VEHICLE · ${cam}`, opts)
+      return
+    case 'LINGERING_AT_VEHICLE': {
+      const secs = Math.max(0, Math.round((now - s.since) / 1000))
+      if (known) st.emit('INFO', 'ACTIVITY', `${who} STILL AT VEHICLE · ${cam}`, opts)
+      else if (s.personLabel === 'UNKNOWN') st.emit('WARN', 'ALERT', `UNKNOWN PERSON LINGERING AT VEHICLE ${secs}s · ${cam}`, opts)
+      else st.emit('NOTICE', 'ACTIVITY', `PERSON LINGERING AT VEHICLE ${secs}s · ${cam}`, opts)
+      return
+    }
+    case 'CROUCHING_AT_VEHICLE':
+      if (known) st.emit('INFO', 'ACTIVITY', `${who} CROUCHING AT VEHICLE · ${cam}`, opts)
+      else if (s.personLabel === 'UNKNOWN') st.emit('WARN', 'ALERT', `UNKNOWN PERSON CROUCHING AT VEHICLE · ${cam}`, opts)
+      else st.emit('NOTICE', 'ACTIVITY', `PERSON CROUCHING AT VEHICLE · ${cam}`, opts)
+      return
+    case 'PACKAGE_AT_ENTRY':
+      st.emit('NOTICE', 'DETECTION', `PACKAGE AT ENTRY · ${cam}`, opts)
+      return
+  }
+}
+
+/** Diff live situations against the emitted set: starts + upgrades only. */
+function emitSituationEvents(st: HomeStore, situations: Situation[], now: number): void {
+  const live = new Set<string>()
+  for (const s of situations) {
+    live.add(s.id)
+    const prev = seenSituations.get(s.id)
+    if (prev === s.kind) continue
+    if (prev === undefined || (prev === 'AT_VEHICLE' && s.kind === 'LINGERING_AT_VEHICLE')) {
+      emitSituation(st, s, now)
+    }
+    seenSituations.set(s.id, s.kind)
+  }
+  for (const id of [...seenSituations.keys()]) {
+    if (!live.has(id)) seenSituations.delete(id)
+  }
+}
+
+/**
+ * SITUATIONS — fuse fresh tracks, the drawn zones and each person's committed
+ * activity through the deterministic context engine, then mirror situation
+ * starts/upgrades into the event feed. Fully guarded: a bad pass returns the
+ * empty list and can never take the loop down.
+ */
+function runSituations(st: HomeStore, now: number): Situation[] {
+  try {
+    const tracksByCamera = new Map<string, TrackedBox[]>()
+    for (const cameraId of allCameraIds(st)) {
+      let tracks: TrackedBox[]
+      try {
+        tracks = getTracks(cameraId)
+      } catch {
+        continue
+      }
+      const fresh = tracks.filter((t) => now - t.updatedAt <= TRACK_FRESH_MS)
+      if (fresh.length > 0) tracksByCamera.set(cameraId, fresh)
+    }
+    const zonesByCamera = new Map<string, Zone[]>()
+    for (const z of st.zones) {
+      const arr = zonesByCamera.get(z.cameraId)
+      if (arr) arr.push(z)
+      else zonesByCamera.set(z.cameraId, [z])
+    }
+    const activityByPerson = new Map<string, ActivityKind | null>()
+    for (const [personId, b] of book) activityByPerson.set(personId, b.activity)
+
+    const input: ContextInput = { now, night: isNight(now), tracksByCamera, zonesByCamera, activityByPerson }
+    const situations = detectSituations(contextState, input)
+    emitSituationEvents(st, situations, now)
+    return situations
+  } catch {
+    return []
+  }
+}
+
 /* ── snapshot assembly ─────────────────────────────────────────────── */
 
 function buildOccupancy(st: HomeStore, now: number): { occupancy: BrainSnapshot['occupancy']; unknownActive: boolean } {
@@ -419,7 +543,7 @@ function buildInsights(st: HomeStore, now: number): string[] {
   return out
 }
 
-function buildSnapshot(st: HomeStore, now: number): BrainSnapshot {
+function buildSnapshot(st: HomeStore, now: number, situations: Situation[]): BrainSnapshot {
   const { occupancy, unknownActive } = buildOccupancy(st, now)
   const people: PersonNow[] = st.people.map((p) => {
     const b = ensureBook(p, now)
@@ -437,18 +561,20 @@ function buildSnapshot(st: HomeStore, now: number): BrainSnapshot {
       routine: routineLine(usualArrival(routines[p.id] ?? [], now)) ?? undefined,
     }
   })
-  return { ts: now, pose: poseState(), people, unknownActive, occupancy, situations: [], insights: buildInsights(st, now) }
+  return { ts: now, pose: poseState(), people, unknownActive, occupancy, situations, insights: buildInsights(st, now) }
 }
 
 /**
  * Report only when something MATERIAL changed — pose state, a present flag or
- * activity, an occupancy count, unknownActive, the insight count — or on the
- * 1.5 s heartbeat. Never every pass.
+ * activity, an occupancy count, unknownActive, a situation starting / being
+ * upgraded / ending, the insight count — or on the 1.5 s heartbeat. Never
+ * every pass.
  */
 function fingerprint(snap: BrainSnapshot): string {
   const ppl = snap.people.map((p) => `${p.personId}:${p.present ? 1 : 0}:${p.activity ?? '-'}`).join(',')
   const occ = snap.occupancy.map((o) => `${o.cameraId}:${o.persons}`).join(',')
-  return `${snap.pose}|${snap.unknownActive ? 1 : 0}|${snap.insights.length}|${ppl}|${occ}`
+  const sit = snap.situations.map((s) => `${s.id}:${s.kind}`).join(',')
+  return `${snap.pose}|${snap.unknownActive ? 1 : 0}|${snap.insights.length}|${ppl}|${occ}|${sit}`
 }
 
 function maybeReport(st: HomeStore, snap: BrainSnapshot, now: number): void {
@@ -465,10 +591,16 @@ function pass(now: number): void {
   const st = useHome.getState()
   rolloverDay(now)
   syncRoster(st, now)
+  // pose retry — while OFFLINE, re-attempt the model load at most every 60 s
+  if (poseState() === 'offline' && now - lastPoseRetryAt >= POSE_RETRY_MS) {
+    lastPoseRetryAt = now
+    void loadPose()
+  }
   const poseCoveredId = runPose(st, now)
   runMotionFallback(st, now, poseCoveredId)
   runPresenceRoutines(st, now)
-  maybeReport(st, buildSnapshot(st, now), now)
+  const situations = runSituations(st, now)
+  maybeReport(st, buildSnapshot(st, now, situations), now)
 }
 
 function tick(): void {
@@ -496,6 +628,9 @@ export function startBrain(): void {
   book.clear()
   poseHistory = []
   poseSmoother = new ActivitySmoother()
+  contextState = createContextState()
+  seenSituations.clear()
+  lastPoseRetryAt = now
   lastFingerprint = ''
   lastReportAt = 0
 

@@ -3,9 +3,9 @@
  *
  * Pure, deterministic geometry over MediaPipe pose landmarks. Activities are
  * plain observations of what a body is doing — STANDING / SITTING / WALKING /
- * LYING / WAVING — never a judgement about a person. No hidden clock: every
- * function works only on the timestamps carried by its input samples, so the
- * whole file is unit-testable with synthetic skeletons.
+ * RUNNING / CROUCHING / LYING / WAVING — never a judgement about a person. No
+ * hidden clock: every function works only on the timestamps carried by its
+ * input samples, so the whole file is unit-testable with synthetic skeletons.
  *
  * Landmark topology (MediaPipe Pose, 33 points): nose 0, shoulders 11/12,
  * wrists 15/16, hips 23/24, knees 25/26, ankles 27/28.
@@ -61,10 +61,20 @@ export const SITTING_KNEE_DEG = 130
 export const SITTING_TORSO_DEG = 40
 /** WALKING: hip-center |dx/dt| EMA above this (normalized units / second). */
 export const WALK_SPEED = 0.06
+/** RUNNING: the same hip-x EMA above this (units/s) — RUNNING beats WALKING. */
+export const RUN_SPEED = 0.16
 /** WALKING looks at roughly the last second of history. */
 export const WALK_WINDOW_MS = 1000
 /** EMA weight per successive sample pair inside the walk window. */
 export const WALK_EMA_ALPHA = 0.4
+/** CROUCHING: mean knee angle below this (a much deeper fold than SITTING's 130°). */
+export const CROUCH_KNEE_DEG = 100
+/** CROUCHING: vertical hip→ankle distance below this fraction of the standing span. */
+export const CROUCH_HIP_DROP_RATIO = 0.35
+/** CROUCHING: torso may lean forward up to this many degrees off vertical. */
+export const CROUCH_TORSO_DEG = 60
+/** CROUCHING: hips may sit above knee level by at most this fraction of the standing span. */
+export const CROUCH_HIP_KNEE_TOL = 0.05
 /** WAVING looks at the last 1.2 s of wrist track. */
 export const WAVE_WINDOW_MS = 1200
 /** WAVING: at least this many direction reversals inside the window… */
@@ -133,6 +143,60 @@ function kneeAngleDeg(s: PoseSample): number | null {
     n++
   }
   return n > 0 ? sum / n : null
+}
+
+interface CrouchMetrics {
+  /** vertical hip-center → ankle-center distance (normalized units) */
+  hipDrop: number
+  /** hipCenter.y − kneeCenter.y — positive = hips BELOW the knees (y grows down) */
+  hipBelowKnee: number
+  /** the STANDING shoulder→ankle span, reconstructed from this same sample */
+  standingSpan: number
+}
+
+/**
+ * Crouch geometry for one sample. The "standing shoulder→ankle span" is
+ * reconstructed pose-invariantly from the SAME sample as the sum of segment
+ * lengths |shoulderC−hipC| + mean over fully-visible legs of
+ * (|hip−knee| + |knee−ankle|) — limb lengths don't change when the body
+ * folds, so this measures what the span WOULD be standing, without needing
+ * any earlier upright frame. Null when the hips or every leg are unseen.
+ */
+function crouchMetrics(s: PoseSample): CrouchMetrics | null {
+  const ls = joint(s, LM.L_SHOULDER)
+  const rs = joint(s, LM.R_SHOULDER)
+  const lh = joint(s, LM.L_HIP)
+  const rh = joint(s, LM.R_HIP)
+  if (!ls || !rs || !lh || !rh) return null
+  const shoulderC = mid(ls, rs)
+  const hipC = mid(lh, rh)
+
+  const legs: Array<[number, number, number]> = [
+    [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE],
+    [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE],
+  ]
+  let legLenSum = 0
+  let kneeY = 0
+  let ankleY = 0
+  let n = 0
+  for (const [h, k, a] of legs) {
+    const hip = joint(s, h)
+    const knee = joint(s, k)
+    const ankle = joint(s, a)
+    if (!hip || !knee || !ankle) continue
+    legLenSum += Math.hypot(hip.x - knee.x, hip.y - knee.y) + Math.hypot(knee.x - ankle.x, knee.y - ankle.y)
+    kneeY += knee.y
+    ankleY += ankle.y
+    n++
+  }
+  if (n === 0) return null
+  const kneeCy = kneeY / n
+  const ankleCy = ankleY / n
+  return {
+    hipDrop: Math.abs(ankleCy - hipC.y),
+    hipBelowKnee: hipC.y - kneeCy,
+    standingSpan: Math.hypot(shoulderC.x - hipC.x, shoulderC.y - hipC.y) + legLenSum / n,
+  }
 }
 
 /**
@@ -211,8 +275,9 @@ function conf(margin: number, span: number): number {
  * not confidently visible — no guessing from half a body.
  *
  * Rule order: LYING wins outright (a raised arm while lying is not a wave),
- * then WAVING overrides SITTING/WALKING/STANDING, then SITTING, then WALKING,
- * else STANDING.
+ * then WAVING, then CROUCHING, then SITTING, then RUNNING, then WALKING,
+ * else STANDING. CROUCHING outranks SITTING (it is the stricter shape) and
+ * RUNNING outranks WALKING (it is the stricter speed).
  */
 export function classifyInstant(history: PoseSample[]): InstantActivity | null {
   if (history.length === 0) return null
@@ -249,14 +314,42 @@ export function classifyInstant(history: PoseSample[]): InstantActivity | null {
     return { kind: 'WAVING', confidence: conf(bestFlips - WAVE_MIN_FLIPS, WAVE_MIN_FLIPS) }
   }
 
-  // SITTING — bent knees under an upright torso.
+  // CROUCHING vs SITTING — both bend the knees under a not-horizontal torso.
+  // Exact discriminator: CROUCHING requires ALL of
+  //   (a) mean knee angle < 100° (SITTING accepts anything < 130°),
+  //   (b) the pelvis dropped to the feet — vertical hip→ankle distance
+  //       < 0.35 × the standing shoulder→ankle span (reconstructed from the
+  //       same sample, see crouchMetrics; a seated pelvis rests ~0.4–0.6 of
+  //       the span above the ankles),
+  //   (c) hips at or BELOW knee level, allowing at most 0.05 × span above it
+  //       (hipC.y ≥ kneeC.y − 0.05·span; y grows downward), and
+  //   (d) torso ≤ 60° off vertical — a crouch may lean well forward, which
+  //       SITTING (≤ 40°) rejects.
+  // A chair sit fails (b) — and usually (a) — so it falls through to SITTING.
   const knee = kneeAngleDeg(now)
+  if (knee !== null && knee < CROUCH_KNEE_DEG && torso <= CROUCH_TORSO_DEG) {
+    const m = crouchMetrics(now)
+    if (
+      m !== null &&
+      m.standingSpan > 0 &&
+      m.hipDrop < CROUCH_HIP_DROP_RATIO * m.standingSpan &&
+      m.hipBelowKnee >= -CROUCH_HIP_KNEE_TOL * m.standingSpan
+    ) {
+      return { kind: 'CROUCHING', confidence: conf(CROUCH_KNEE_DEG - knee, 40) }
+    }
+  }
+
+  // SITTING — bent knees under an upright torso.
   if (knee !== null && knee < SITTING_KNEE_DEG && torso <= SITTING_TORSO_DEG) {
     return { kind: 'SITTING', confidence: conf(SITTING_KNEE_DEG - knee, 60) }
   }
 
-  // WALKING — sustained lateral hip motion while upright.
+  // RUNNING / WALKING — sustained lateral hip motion while upright, one
+  // speed metric split at RUN_SPEED: the faster read wins.
   const speed = hipSpeedEma(history, now.t)
+  if (speed !== null && speed > RUN_SPEED) {
+    return { kind: 'RUNNING', confidence: conf(speed - RUN_SPEED, RUN_SPEED) }
+  }
   if (speed !== null && speed > WALK_SPEED) {
     return { kind: 'WALKING', confidence: conf(speed - WALK_SPEED, WALK_SPEED) }
   }
@@ -273,10 +366,12 @@ export function classifyInstant(history: PoseSample[]): InstantActivity | null {
 /* ── temporal smoothing ────────────────────────────────────────────── */
 
 export interface SmootherOptions {
-  /** ms a majority must persist before a non-WAVING commit (default 2500) */
+  /** ms a majority must persist before a regular commit (default 2500) */
   holdMs?: number
   /** ms a WAVING majority must persist before committing (default 1000) */
   wavingHoldMs?: number
+  /** ms a RUNNING/CROUCHING majority must persist before committing (default 1200) */
+  fastHoldMs?: number
   /** ms after which a committed WAVING auto-expires (default 4000) */
   wavingExpireMs?: number
   /** how many trailing non-null samples the majority looks at (default 8) */
@@ -291,16 +386,20 @@ export interface SmootherOptions {
  * Debounces instant classifications into a stable committed activity.
  *
  * A NEW activity commits only when it is the majority (≥5 of the last 8
- * non-null samples) AND that majority has persisted continuously for ≥2.5 s.
- * WAVING is a moment, not a state: it fast-commits after 1.0 s and
- * auto-expires 4 s after committing, back to the runner-up kind in the window
- * (most frequent non-WAVING, latest-seen wins ties) or null.
+ * non-null samples) AND that majority has persisted continuously for the
+ * kind's hold. Per-kind fast-commit: WAVING commits after 1.0 s; RUNNING and
+ * CROUCHING after 1.2 s (both are transient and reaction-relevant — waiting
+ * the full 2.5 s would routinely miss them); everything else holds 2.5 s.
+ * WAVING is a moment, not a state: it also auto-expires 4 s after
+ * committing, back to the runner-up kind in the window (most frequent
+ * non-WAVING, latest-seen wins ties) or null.
  *
  * Fully deterministic — time only ever arrives through `push(t, …)`.
  */
 export class ActivitySmoother {
   private readonly holdMs: number
   private readonly wavingHoldMs: number
+  private readonly fastHoldMs: number
   private readonly wavingExpireMs: number
   private readonly windowSamples: number
   private readonly windowMs: number
@@ -315,6 +414,7 @@ export class ActivitySmoother {
   constructor(opts: SmootherOptions = {}) {
     this.holdMs = opts.holdMs ?? 2500
     this.wavingHoldMs = opts.wavingHoldMs ?? 1000
+    this.fastHoldMs = opts.fastHoldMs ?? 1200
     this.wavingExpireMs = opts.wavingExpireMs ?? 4000
     this.windowSamples = opts.windowSamples ?? 8
     this.windowMs = opts.windowMs ?? 4000
@@ -354,7 +454,8 @@ export class ActivitySmoother {
       this.candidate = maj
       this.candidateSince = t
     }
-    const hold = maj === 'WAVING' ? this.wavingHoldMs : this.holdMs
+    const hold =
+      maj === 'WAVING' ? this.wavingHoldMs : maj === 'RUNNING' || maj === 'CROUCHING' ? this.fastHoldMs : this.holdMs
     if (t - this.candidateSince >= hold) {
       this.committed = maj
       this.wavingCommittedAt = maj === 'WAVING' ? t : null

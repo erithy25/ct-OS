@@ -1,7 +1,9 @@
 /**
- * Pose → activity classification: synthetic skeletons through the pure rules,
- * plus the temporal smoother's hold / commit / waving fast-path behaviour.
- * Everything is deterministic — time only exists in the injected sample `t`s.
+ * Pose → activity classification: synthetic skeletons through the pure rules
+ * (including RUNNING vs WALKING and CROUCHING vs SITTING), plus the temporal
+ * smoother's hold / commit / fast-commit (WAVING · RUNNING · CROUCHING)
+ * behaviour. Everything is deterministic — time only exists in the injected
+ * sample `t`s.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -74,6 +76,41 @@ function raisedWristLm(wristX: number): PoseLandmarkLite[] {
   return lm
 }
 
+/**
+ * Deep crouch: knees folded to ≈42°, pelvis dropped below knee level and near
+ * the ankles (hip→ankle 0.14 vs a ≈0.56 reconstructed standing span), torso
+ * leaning ≈45° forward — more lean than SITTING tolerates (40°).
+ */
+function crouchLm(): PoseLandmarkLite[] {
+  const lm = blank()
+  put(lm, LM.NOSE, 0.74, 0.54)
+  put(lm, LM.L_SHOULDER, 0.64, 0.6)
+  put(lm, LM.R_SHOULDER, 0.72, 0.6)
+  put(lm, LM.L_WRIST, 0.66, 0.8) // hanging low — never reads as raised
+  put(lm, LM.R_WRIST, 0.7, 0.8)
+  put(lm, LM.L_HIP, 0.46, 0.78)
+  put(lm, LM.R_HIP, 0.54, 0.78)
+  put(lm, LM.L_KNEE, 0.38, 0.72) // knees ABOVE the hips (y grows downward)
+  put(lm, LM.R_KNEE, 0.62, 0.72)
+  put(lm, LM.L_ANKLE, 0.42, 0.92)
+  put(lm, LM.R_ANKLE, 0.58, 0.92)
+  return lm
+}
+
+/**
+ * Deep-bent chair sit: knees ≈87° (below the crouch gate's 100°) under a
+ * perfectly upright torso — but the pelvis stays HIGH above the ankles
+ * (hip→ankle 0.27 vs a ≈0.66 standing span → ratio 0.41 > 0.35).
+ */
+function deepSitLm(): PoseLandmarkLite[] {
+  const lm = standingLm()
+  put(lm, LM.L_KNEE, 0.66, 0.58)
+  put(lm, LM.R_KNEE, 0.66, 0.58)
+  put(lm, LM.L_ANKLE, 0.6, 0.82) // feet tucked slightly under the seat
+  put(lm, LM.R_ANKLE, 0.6, 0.82)
+  return lm
+}
+
 const sample = (t: number, lm: PoseLandmarkLite[]): PoseSample => ({ t, lm })
 
 /** ±0.05 square wave around 0.58, period 400 ms — a clear wave gesture. */
@@ -109,6 +146,34 @@ describe('classifyInstant', () => {
     const r = classifyInstant(history)
     expect(r?.kind).toBe('WALKING')
     expect(r?.confidence).toBeGreaterThan(0.5)
+  })
+
+  it('reads FAST hip translation as RUNNING, beating WALKING', () => {
+    // hip-center moves 0.02 units per 100 ms → 0.20 units/s (> 0.16)
+    const history: PoseSample[] = []
+    for (let i = 0; i < 10; i++) history.push(sample(i * 100, standingLm(0.02 * i)))
+    const r = classifyInstant(history)
+    expect(r?.kind).toBe('RUNNING')
+    expect(r?.confidence).toBeGreaterThan(0.5)
+  })
+
+  it('brisk-but-not-fast hip motion stays WALKING (below the RUNNING split)', () => {
+    // 0.014 units per 100 ms → 0.14 units/s: above 0.06, below 0.16
+    const history: PoseSample[] = []
+    for (let i = 0; i < 10; i++) history.push(sample(i * 100, standingLm(0.014 * i)))
+    expect(classifyInstant(history)?.kind).toBe('WALKING')
+  })
+
+  it('reads deep knees + hips at ankle height + forward torso as CROUCHING', () => {
+    const r = classifyInstant([sample(0, crouchLm())])
+    expect(r?.kind).toBe('CROUCHING')
+    expect(r?.confidence).toBeGreaterThan(0.5)
+  })
+
+  it('crouch vs sit: deeply bent knees with the pelvis still high reads SITTING', () => {
+    // knees ≈87° would pass the crouch knee gate, but the hip→ankle drop
+    // (0.41 of the standing span) fails the ≤0.35 pelvis-drop rule
+    expect(classifyInstant([sample(0, deepSitLm())])?.kind).toBe('SITTING')
   })
 
   it('reads a raised, oscillating wrist as WAVING (overriding STANDING)', () => {
@@ -152,6 +217,8 @@ describe('classifyInstant', () => {
 const STAND: InstantActivity = { kind: 'STANDING', confidence: 0.8 }
 const SIT: InstantActivity = { kind: 'SITTING', confidence: 0.8 }
 const WAVE: InstantActivity = { kind: 'WAVING', confidence: 0.9 }
+const RUN: InstantActivity = { kind: 'RUNNING', confidence: 0.8 }
+const CROUCH: InstantActivity = { kind: 'CROUCHING', confidence: 0.8 }
 
 /** Push `result` every 300 ms over [from, to] inclusive. */
 function feed(s: ActivitySmoother, from: number, to: number, result: InstantActivity | null): void {
@@ -185,6 +252,22 @@ describe('ActivitySmoother', () => {
     expect(s.current()).toBeNull() // majority at 1200; 2100−1200 < 1000
     s.push(2400, WAVE)
     expect(s.current()).toBe('WAVING') // 2400−1200 ≥ 1000
+  })
+
+  it('RUNNING fast-commits after 1.2 s of majority (not the 2.5 s hold)', () => {
+    const s = new ActivitySmoother()
+    feed(s, 0, 2100, RUN)
+    expect(s.current()).toBeNull() // majority at 1200; 2100−1200 = 900 < 1200
+    s.push(2400, RUN)
+    expect(s.current()).toBe('RUNNING') // 2400−1200 = 1200 ≥ 1200
+  })
+
+  it('CROUCHING fast-commits after 1.2 s of majority (not the 2.5 s hold)', () => {
+    const s = new ActivitySmoother()
+    feed(s, 0, 2100, CROUCH)
+    expect(s.current()).toBeNull() // majority at 1200; 2100−1200 = 900 < 1200
+    s.push(2400, CROUCH)
+    expect(s.current()).toBe('CROUCHING') // 2400−1200 = 1200 ≥ 1200
   })
 
   it('committed WAVING auto-expires after 4 s back to the runner-up', () => {
