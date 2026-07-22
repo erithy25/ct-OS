@@ -25,8 +25,9 @@ export const MATCH_IOU = 0.25
 export const GHOST_MS = 700
 /** face reads older than this are ignored by fusion */
 export const FACE_FRESH_MS = 1600
-/** velocity EMA weight of the newest instantaneous velocity */
-export const VEL_EMA = 0.5
+/** velocity EMA weight of the newest instantaneous velocity — biased toward
+ *  the fresh sample so direction changes register within one frame */
+export const VEL_EMA = 0.65
 /** velocity clamp, normalized units / second, per component */
 export const VEL_MAX = 2.5
 /** consecutive null-id face reads before a pending track goes UNKNOWN */
@@ -240,7 +241,13 @@ export function stepTracks(
         const cur = assigned.get(best)
         if (!cur || iou(f.box, best.box) > iou(cur.box, best.box)) assigned.set(best, f)
       }
-      for (const [t, f] of assigned) fuseFace(t, f, people)
+      for (const [t, f] of assigned) {
+        // remember the face's own box — the overlay draws a tight face frame
+        // when the body box would swallow most of the image (close-up case)
+        t.faceBox = [f.box[0], f.box[1], f.box[2], f.box[3]]
+        t.faceBoxAt = f.ts
+        fuseFace(t, f, people)
+      }
 
       // long-lived person track the engine has watched without ever matching
       // anyone enrolled → honestly UNKNOWN (never anything stronger).

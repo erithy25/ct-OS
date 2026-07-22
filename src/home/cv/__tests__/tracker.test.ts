@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { iou, stepTracks, type Box } from '../tracker'
+import { iou, stepTracks, VEL_EMA, type Box } from '../tracker'
 import type { Detection, FaceRead, Person, TrackedBox } from '../../types'
 
 /* ── fixture builders (fixed timestamps everywhere — no Date.now()) ── */
@@ -108,19 +108,21 @@ describe('track lifecycle', () => {
 /* ── velocity ──────────────────────────────────────────────────────── */
 
 describe('velocity', () => {
-  it('EMA(0.5)-follows the instantaneous velocity with the right direction', () => {
+  it('EMA(VEL_EMA)-follows the instantaneous velocity with the right direction', () => {
+    const a = VEL_EMA
     const t1 = step([], [det(BODY)], 1000)
-    // +0.1 x over 100ms → inst 1.0/s → EMA from 0: 0.5
+    // +0.1 x over 100ms → inst 1.0/s → EMA from 0: a·1.0
     const t2 = step(t1, [det([0.5, 0.2, 0.2, 0.6])], 1100)
-    expect(t2[0].vel[0]).toBeCloseTo(0.5, 6)
+    expect(t2[0].vel[0]).toBeCloseTo(a * 1.0, 6)
     expect(t2[0].vel[1]).toBeCloseTo(0, 6)
     expect(t2[0].vel[2]).toBeCloseTo(0, 6)
-    // again +0.1 x over 100ms → EMA: 0.5*0.5 + 0.5*1.0 = 0.75
+    // again +0.1 x over 100ms → EMA: (1−a)·(a·1.0) + a·1.0
+    const v2 = (1 - a) * (a * 1.0) + a * 1.0
     const t3 = step(t2, [det([0.6, 0.2, 0.2, 0.6])], 1200)
-    expect(t3[0].vel[0]).toBeCloseTo(0.75, 6)
-    // reverse direction: −0.1 x over 100ms → 0.5*0.75 + 0.5*(−1) = −0.125
+    expect(t3[0].vel[0]).toBeCloseTo(v2, 6)
+    // reverse direction: −0.1 x over 100ms → (1−a)·v2 + a·(−1)
     const t4 = step(t3, [det([0.5, 0.2, 0.2, 0.6])], 1300)
-    expect(t4[0].vel[0]).toBeCloseTo(-0.125, 6)
+    expect(t4[0].vel[0]).toBeCloseTo((1 - a) * v2 + a * -1, 6)
   })
 
   it('clamps each component to ±2.5 units/second', () => {

@@ -21,6 +21,8 @@ const ACTIVITY_COLOR: Record<ActivityKind, string> = {
   STANDING: '#34D399',
   SITTING: '#22D3EE',
   WALKING: '#F5A623',
+  RUNNING: '#FB923C',
+  CROUCHING: '#C084FC',
   LYING: '#8B5CF6',
   WAVING: '#F472B6',
   MOVING: '#5EEAD4',
@@ -128,6 +130,7 @@ export default function Brain() {
         </Panel>
 
         <div className="flex w-[300px] shrink-0 flex-col gap-2">
+          <SituationsPanel brain={brain} now={now} />
           <OccupancyPanel brain={brain} />
           <InsightsPanel brain={brain} />
         </div>
@@ -138,6 +141,43 @@ export default function Brain() {
         ON-DEVICE · AWARENESS, NOT JUDGEMENT · ACTIVITY IS A NEUTRAL OBSERVATION · NOTHING UPLOADED
       </div>
     </div>
+  )
+}
+
+/* ── live situations (context engine) ──────────────────────────────── */
+
+const SITUATION_TEXT: Record<string, string> = {
+  AT_ENTRY: 'AT ENTRY — MAY BE RINGING',
+  AT_VEHICLE: 'AT VEHICLE',
+  LINGERING_AT_VEHICLE: 'LINGERING AT VEHICLE',
+  CROUCHING_AT_VEHICLE: 'CROUCHING AT VEHICLE',
+  PACKAGE_AT_ENTRY: 'PACKAGE AT ENTRY',
+}
+/** WARN-worthy kinds render red when the person is not enrolled */
+const SITUATION_HOT = new Set(['LINGERING_AT_VEHICLE', 'CROUCHING_AT_VEHICLE'])
+
+function SituationsPanel({ brain, now }: { brain: BrainSnapshot | null; now: number }) {
+  const situations = brain?.situations ?? []
+  if (situations.length === 0) return null // quiet by default — no empty panel noise
+  return (
+    <Panel title="SITUATIONS" live className="shrink-0" bodyClassName="p-1.5">
+      <ul className="flex flex-col gap-1">
+        {situations.map((s) => {
+          const unknown = s.personId === null && s.personLabel === 'UNKNOWN'
+          const hot = unknown && SITUATION_HOT.has(s.kind)
+          const color = hot ? 'var(--accent-red)' : unknown ? 'var(--accent-amber)' : 'var(--accent-green)'
+          return (
+            <li key={s.id} className="flex items-center gap-1.5 border px-1.5 py-1" style={{ borderColor: color }}>
+              <span className="led-pulse h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />
+              <span className="num min-w-0 flex-1 truncate text-[10px] leading-4" style={{ color }}>
+                {s.personLabel.toUpperCase()} · {SITUATION_TEXT[s.kind] ?? s.kind}
+              </span>
+              <span className="lbl-faint shrink-0">{dwellStr(s.since, now)}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </Panel>
   )
 }
 

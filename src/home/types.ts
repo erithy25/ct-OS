@@ -99,6 +99,11 @@ export interface TrackedBox {
   personName?: string
   personRole?: 'HOUSEHOLD' | 'GUEST'
   faceDistance?: number
+  /** the fused face's own box (normalized) — lets the overlay draw a tight
+   *  face frame when the body box would cover most of the frame */
+  faceBox?: [number, number, number, number]
+  /** wall ms when faceBox was last refreshed */
+  faceBoxAt?: number
 }
 
 /** One face found in a frame, matched against the enrolled roster. */
@@ -119,7 +124,43 @@ export interface FaceRead {
  * judgement. MOVING/IDLE are the low-confidence motion-only fallbacks used
  * when the pose engine is unavailable.
  */
-export type ActivityKind = 'STANDING' | 'SITTING' | 'WALKING' | 'LYING' | 'WAVING' | 'MOVING' | 'IDLE'
+export type ActivityKind =
+  | 'STANDING'
+  | 'SITTING'
+  | 'WALKING'
+  | 'RUNNING'
+  | 'CROUCHING'
+  | 'LYING'
+  | 'WAVING'
+  | 'MOVING'
+  | 'IDLE'
+
+/* ── situations (context engine) ───────────────────────────────────── */
+
+/**
+ * Observable SITUATIONS fused from tracks + zones + activities: a person
+ * standing at the entry (may be ringing), someone at / lingering at /
+ * crouching next to a detected vehicle, a package at the entry. These state
+ * WHAT IS HAPPENING — the judgement stays with the human.
+ */
+export type SituationKind =
+  | 'AT_ENTRY'
+  | 'AT_VEHICLE'
+  | 'LINGERING_AT_VEHICLE'
+  | 'CROUCHING_AT_VEHICLE'
+  | 'PACKAGE_AT_ENTRY'
+
+export interface Situation {
+  /** stable per occurrence, e.g. `${kind}:${cameraId}:${trackId}` */
+  id: string
+  kind: SituationKind
+  cameraId: string
+  /** enrolled person when known, else null */
+  personId: string | null
+  /** display label: enrolled name, 'UNKNOWN', or 'PERSON' */
+  personLabel: string
+  since: number
+}
 
 export interface ActivitySegment {
   kind: ActivityKind
@@ -156,6 +197,8 @@ export interface BrainSnapshot {
   /** an UNKNOWN person track is currently visible somewhere */
   unknownActive: boolean
   occupancy: { cameraId: string; persons: number; labels: string[] }[]
+  /** live observable situations (context engine) */
+  situations: Situation[]
   insights: string[]
 }
 

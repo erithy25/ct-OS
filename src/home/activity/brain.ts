@@ -437,7 +437,7 @@ function buildSnapshot(st: HomeStore, now: number): BrainSnapshot {
       routine: routineLine(usualArrival(routines[p.id] ?? [], now)) ?? undefined,
     }
   })
-  return { ts: now, pose: poseState(), people, unknownActive, occupancy, insights: buildInsights(st, now) }
+  return { ts: now, pose: poseState(), people, unknownActive, occupancy, situations: [], insights: buildInsights(st, now) }
 }
 
 /**

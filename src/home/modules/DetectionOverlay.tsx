@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react'
-import { getTracks } from '../store'
+import { getTracks, useHome } from '../store'
 import { registerSource } from '../cv/scheduler'
 import type { DetClass, TrackedBox } from '../types'
 import type { DetectSource } from '../cv/detector'
@@ -26,7 +26,12 @@ function colorFor(t: TrackedBox): string {
 
 function labelFor(t: TrackedBox): string {
   if (t.cls === 'person') {
-    if (t.identity === 'known') return `${(t.personName ?? 'KNOWN').toUpperCase()} · ${t.personRole ?? 'HOUSEHOLD'}`
+    if (t.identity === 'known') {
+      const base = `${(t.personName ?? 'KNOWN').toUpperCase()} · ${t.personRole ?? 'HOUSEHOLD'}`
+      // live activity from the smart brain, straight into the chip
+      const nowP = useHome.getState().brain?.people.find((p) => p.personId === t.personId)
+      return nowP?.activity ? `${base} · ${nowP.activity}` : base
+    }
     if (t.identity === 'unknown') return 'UNKNOWN'
     return 'PERSON'
   }
@@ -36,17 +41,33 @@ function labelFor(t: TrackedBox): string {
 /* ── prediction + smoothing tunables ───────────────────────────────── */
 
 /** extrapolate along the track velocity at most this far past the last det */
-const PREDICT_CAP_MS = 200
-/** fraction of the raw velocity lead actually applied (overshoot guard) */
-const PREDICT_GAIN = 0.85
+const PREDICT_CAP_MS = 280
+/** full-strength prediction window; beyond it the extra lead is damped */
+const PREDICT_FULL_MS = 150
+/** gain applied to the lead beyond PREDICT_FULL_MS (overshoot guard) */
+const PREDICT_TAIL_GAIN = 0.75
 /** smoothing time constants — position snaps faster than size */
-const TAU_POS_MS = 70
-const TAU_SIZE_MS = 120
+const TAU_POS_MS = 50
+const TAU_SIZE_MS = 100
 /** fade in after firstSeen / fade out after the track leaves the store */
 const FADE_IN_MS = 120
 const FADE_OUT_MS = 160
 /** person boxes draw with this per-side inset (COCO runs loose) — visual only */
-const PERSON_INSET = 0.03
+const PERSON_INSET = 0.04
+
+/* face-frame swap: when the body box swallows most of the image (close-up),
+ * frame the FACE instead — "only the face when only the face is what you see" */
+/** face reads older than this stop steering the drawn frame */
+const FACE_DRAW_FRESH_MS = 1800
+/** body-box area share of the frame above which the face frame takes over */
+const FACE_SWAP_AREA = 0.32
+/** …or body-box height share of the frame above which it takes over */
+const FACE_SWAP_HEIGHT = 0.78
+/** the face box is inflated to a natural head frame */
+const FACE_INFLATE_W = 1.45
+const FACE_INFLATE_H = 1.65
+/** upward bias so the frame includes forehead/hair, not just the landmarks */
+const FACE_UP_SHIFT = 0.18
 
 interface DrawState {
   /** smoothed normalized [x, y, w, h] actually painted */
@@ -61,14 +82,50 @@ interface DrawState {
 
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v))
 
-/** Predicted target box for a track at wall time `now`. */
+/** Two-stage velocity lead in seconds: full up to PREDICT_FULL_MS, damped after. */
+function leadSeconds(lagMs: number): number {
+  const lag = Math.min(Math.max(0, lagMs), PREDICT_CAP_MS)
+  const full = Math.min(lag, PREDICT_FULL_MS)
+  const tail = Math.max(0, lag - PREDICT_FULL_MS) * PREDICT_TAIL_GAIN
+  return (full + tail) / 1000
+}
+
+/**
+ * Predicted DRAW target for a track at wall time `now` — the box the person
+ * actually occupies right now, chosen adaptively:
+ *   · close-up (body box covering most of the frame) with a fresh face read →
+ *     a tight face frame (inflated to a natural head crop);
+ *   · otherwise the full body box, slightly inset (COCO runs loose).
+ * Position is extrapolated along the track velocity either way.
+ */
 function targetOf(t: TrackedBox, now: number): [number, number, number, number] {
-  const lead = (Math.min(Math.max(0, now - t.updatedAt), PREDICT_CAP_MS) / 1000) * PREDICT_GAIN
+  const lead = leadSeconds(now - t.updatedAt)
+  const dx = t.vel[0] * lead
+  const dy = t.vel[1] * lead
+
+  if (t.cls === 'person' && t.faceBox && t.faceBoxAt !== undefined && now - t.faceBoxAt < FACE_DRAW_FRESH_MS) {
+    const bodyArea = t.box[2] * t.box[3]
+    if (bodyArea > FACE_SWAP_AREA || t.box[3] > FACE_SWAP_HEIGHT) {
+      const [fx, fy, fw, fh] = t.faceBox
+      const w = Math.min(1, fw * FACE_INFLATE_W)
+      const h = Math.min(1, fh * FACE_INFLATE_H)
+      const cx = fx + fw / 2 + dx
+      const yTop = fy - fh * FACE_UP_SHIFT + dy
+      const x = clamp01(Math.min(cx - w / 2, 1 - w))
+      const y = clamp01(Math.min(yTop, 1 - h))
+      return [x, y, w, h]
+    }
+  }
+
+  // body frame with a visual-only inset (stored boxes stay raw for zones)
+  const inset = t.cls === 'person' ? PERSON_INSET : 0
+  const w = t.box[2] * (1 - inset * 2)
+  const h = t.box[3] * (1 - inset * 2)
   return [
-    clamp01(t.box[0] + t.vel[0] * lead),
-    clamp01(t.box[1] + t.vel[1] * lead),
-    clamp01(t.box[2] + t.vel[2] * lead),
-    clamp01(t.box[3] + t.vel[3] * lead),
+    clamp01(t.box[0] + t.box[2] * inset + dx),
+    clamp01(t.box[1] + t.box[3] * inset + dy),
+    clamp01(w + t.vel[2] * lead),
+    clamp01(h + t.vel[3] * lead),
   ]
 }
 
@@ -174,14 +231,7 @@ export default function DetectionOverlay({ cameraId, mediaRef, mirror = false }:
         }
         if (alpha <= 0) continue
 
-        let [nx, ny, nw, nh] = st.box
-        if (st.snap.cls === 'person') {
-          // visual-only tightening — stored boxes stay raw for the zone watch
-          nx += nw * PERSON_INSET
-          ny += nh * PERSON_INSET
-          nw *= 1 - PERSON_INSET * 2
-          nh *= 1 - PERSON_INSET * 2
-        }
+        const [nx, ny, nw, nh] = st.box // inset/face-swap already applied by targetOf
         let x = nx * sw * scale - ox
         const y = ny * sh * scale - oy
         const w = nw * sw * scale

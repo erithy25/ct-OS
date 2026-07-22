@@ -115,11 +115,24 @@ export default function WebcamTile({
  * from the smart brain when available) or a red UNKNOWN. Colors match the
  * overlay's identity palette.
  */
+const SITUATION_LABEL: Record<string, string> = {
+  AT_ENTRY: 'AT ENTRY',
+  AT_VEHICLE: 'AT VEHICLE',
+  LINGERING_AT_VEHICLE: 'LINGERING AT VEHICLE',
+  CROUCHING_AT_VEHICLE: 'CROUCHING AT VEHICLE',
+}
+
 function IdentityBadge({ personId, people, brain }: { personId: string | null; people: { id: string; name: string }[]; brain: BrainSnapshot | null }) {
   const known = personId ? people.find((p) => p.id === personId) : undefined
   const color = known ? '#34D399' : '#FF3B47'
   let label = known ? known.name.toUpperCase() : 'UNKNOWN'
-  if (known) {
+  // a live situation (context engine) outranks the plain activity
+  const situation = brain?.situations?.find((s) =>
+    known ? s.personId === known.id : s.personId === null && s.personLabel === 'UNKNOWN',
+  )
+  if (situation && SITUATION_LABEL[situation.kind]) {
+    label = `${label} · ${SITUATION_LABEL[situation.kind]}`
+  } else if (known) {
     const now = brain?.people.find((p) => p.personId === known.id)
     if (now?.activity) label = `${label} · ${now.activity}`
   }

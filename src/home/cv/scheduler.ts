@@ -23,9 +23,9 @@ type SourceGetter = () => DetectSource | null
 const LOOP_MS = 70
 /** heartbeat while the model is still loading / offline */
 const LOOP_IDLE_MS = 600
-/** webcam target interval = clamp(2 × last inference ms, MIN..MAX) */
-const WEBCAM_MIN_MS = 120
-const WEBCAM_MAX_MS = 480
+/** webcam target interval = clamp(1.3 × last inference ms, MIN..MAX) */
+const WEBCAM_MIN_MS = 90
+const WEBCAM_MAX_MS = 360
 /** bridged cameras round-robin at this interval */
 const BRIDGED_MS = 420
 /** a registered tile with no live frames yet is re-checked after this */
@@ -107,7 +107,7 @@ function processEvents(cameraId: string, dets: Detection[]): void {
 function intervalFor(cameraId: string): number {
   if (cameraId === WEBCAM_ID) {
     const dur = lastDur.get(cameraId) ?? WEBCAM_MIN_MS
-    return Math.max(WEBCAM_MIN_MS, Math.min(WEBCAM_MAX_MS, 2 * dur))
+    return Math.max(WEBCAM_MIN_MS, Math.min(WEBCAM_MAX_MS, 1.3 * dur))
   }
   return BRIDGED_MS
 }
@@ -157,15 +157,20 @@ function maybeBridgedFaces(cameraId: string, src: DetectSource, tracks: TrackedB
 /* ── per-camera inference + fusion ─────────────────────────────────── */
 
 async function runCamera(cameraId: string, src: DetectSource): Promise<void> {
+  // stamp the frame at CAPTURE time — the box the model returns describes the
+  // world as of now, not as of when inference finishes. Tracks carrying the
+  // capture timestamp let the overlay's velocity prediction cover the full
+  // model latency, which is what makes the box stick to a moving person.
+  const captureTs = Date.now()
   const t0 = performance.now()
   const dets = await detect(cameraId, src)
   lastDur.set(cameraId, Math.max(1, performance.now() - t0))
-  const now = Date.now()
-  nextDue.set(cameraId, now + intervalFor(cameraId))
+  const done = Date.now()
+  nextDue.set(cameraId, done + intervalFor(cameraId))
 
   // temporal tracking + identity fusion → the overlay's data
   const tracks = stepTracks(getTracks(cameraId), dets, getFaceReads(cameraId), useHome.getState().people, {
-    now,
+    now: captureTs,
     faceEngineReady: faceState() === 'ready',
     cameraId,
   })
@@ -177,14 +182,14 @@ async function runCamera(cameraId: string, src: DetectSource): Promise<void> {
   const fused = dets.map((d) => {
     if (d.cls !== 'person') return d
     const t = tracks.find(
-      (tr) => tr.cls === 'person' && tr.updatedAt === now && tr.identity === 'known' && sameBox(tr.box, d.box),
+      (tr) => tr.cls === 'person' && tr.updatedAt === captureTs && tr.identity === 'known' && sameBox(tr.box, d.box),
     )
     return t !== undefined && t.personId !== null ? { ...d, personId: t.personId } : d
   })
   setDetections(cameraId, fused)
 
   if (dets.length > 0) {
-    for (let i = 0; i < dets.length; i++) detTimes.push(now)
+    for (let i = 0; i < dets.length; i++) detTimes.push(done)
     processEvents(cameraId, dets)
   }
 
