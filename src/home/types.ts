@@ -233,8 +233,16 @@ export interface Zone {
   cameraId: string
   name: string
   kind: 'PROPERTY' | 'ENTRY' | 'DRIVEWAY' | 'RESTRICTED' | 'IGNORE'
-  /** polygon in normalized 0..1 camera coords */
+  /** polygon in normalized 0..1 camera coords — ALWAYS closed; the watch
+   *  engines test against this (for boundary lines it is derived) */
   points: [number, number][]
+  /** BOUNDARY-LINE zones: the drawn open polyline (the property border). The
+   *  armed region = `points`, derived by closing the line around the chosen
+   *  side of the image. Absent for classic area zones. */
+  line?: [number, number][]
+  /** BOUNDARY-LINE zones: the user-clicked point marking "this side is my
+   *  property" — used to (re)derive `points` and to flip sides. */
+  sidePoint?: [number, number]
   /** alert when a person enters (respecting schedule) */
   alertOnEnter: boolean
   /** only at night, or always */

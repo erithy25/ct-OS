@@ -184,7 +184,7 @@ export default function DetectionOverlay({ cameraId, mediaRef, mirror = false }:
 
       const now = Date.now()
       const tracks = getTracks(cameraId)
-      if (tracks.length === 0 && states.size === 0) return
+      const zones = useHome.getState().zones
 
       const { w: sw, h: sh } = naturalSize(media)
       if (!sw || !sh) return
@@ -192,6 +192,41 @@ export default function DetectionOverlay({ cameraId, mediaRef, mirror = false }:
       const scale = Math.max(cw / sw, ch / sh)
       const ox = (sw * scale - cw) / 2
       const oy = (sh * scale - ch) / 2
+
+      // ── armed zones, drawn under the tracking boxes ──
+      const toX = (nx: number): number => {
+        const x = nx * sw * scale - ox
+        return mirror ? cw - x : x
+      }
+      const toY = (ny: number): number => ny * sh * scale - oy
+      for (const z of zones) {
+        if (z.cameraId !== cameraId || z.points.length < 3) continue
+        ctx.beginPath()
+        z.points.forEach((p, i) => (i === 0 ? ctx.moveTo(toX(p[0]), toY(p[1])) : ctx.lineTo(toX(p[0]), toY(p[1]))))
+        ctx.closePath()
+        ctx.fillStyle = z.color
+        ctx.globalAlpha = 0.05
+        ctx.fill()
+        if (z.line && z.line.length >= 2) {
+          // boundary line — the visible property border on the live image
+          ctx.globalAlpha = 0.85
+          ctx.strokeStyle = z.color
+          ctx.lineWidth = 2
+          ctx.setLineDash([7, 5])
+          ctx.beginPath()
+          z.line.forEach((p, i) => (i === 0 ? ctx.moveTo(toX(p[0]), toY(p[1])) : ctx.lineTo(toX(p[0]), toY(p[1]))))
+          ctx.stroke()
+          ctx.setLineDash([])
+        } else {
+          ctx.globalAlpha = 0.4
+          ctx.strokeStyle = z.color
+          ctx.lineWidth = 1
+          ctx.stroke()
+        }
+        ctx.globalAlpha = 1
+      }
+
+      if (tracks.length === 0 && states.size === 0) return
 
       // ── advance draw states toward each live track's predicted target ──
       const liveIds = new Set<number>()

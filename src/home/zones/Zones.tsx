@@ -1,26 +1,29 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { API_ORIGIN, useHome, WEBCAM_ID } from '../store'
-import { cameraSnapshotUrl } from '../../realworld/contract'
+import { cameraSnapshotUrl, cameraStreamUrl } from '../../realworld/contract'
 import type { CameraStatus } from '../../realworld/contract'
 import type { Zone } from '../types'
-import { polygonCentroid } from './geometry'
+import { lineBothPolygons, lineSidePolygon, pointInPolygon, polygonCentroid } from './geometry'
+import { getFaceStream } from '../people/faceWatch'
 import CornerBrackets from '../../components/CornerBrackets'
 import { uiClick } from '../../lib/audio'
 
 /**
- * ZONES — draw property / entry / driveway regions over a camera still and arm
- * them so a person entering raises a real, local alert (the alerting itself
- * lives in ./zoneWatch, started once at app boot).
+ * ZONES — draw your property boundary as a LINE (then pick which side is
+ * yours) or classic area zones, directly over the LIVE camera image. The
+ * alerting itself lives in ./zoneWatch; boundary lines are closed into normal
+ * polygons via geometry.lineSidePolygon so every watcher keeps working.
  *
- * Coordinates are stored normalized 0..1 relative to the displayed image rect,
- * so a polygon drawn here lines up with a `Detection.box` from the on-device
- * model regardless of resolution.
+ * Coordinates are stored normalized 0..1 in UNMIRRORED image space — the same
+ * space Detection.box lives in. The operator webcam is DISPLAYED mirrored
+ * (like the Live Wall), so this view flips x on input and output for it.
  */
 
 type Kind = Zone['kind']
+type DrawMode = 'line' | 'area'
+type Phase = 'idle' | 'draw' | 'side'
 
 const KINDS: Kind[] = ['PROPERTY', 'ENTRY', 'DRIVEWAY', 'RESTRICTED', 'IGNORE']
-/** color by kind — cyan / amber / violet / red / faint (matches design tokens) */
 const KIND_COLOR: Record<Kind, string> = {
   PROPERTY: '#22D3EE',
   ENTRY: '#F5A623',
@@ -109,29 +112,54 @@ export default function Zones() {
   )
 
   // draw / edit state
-  const [drawing, setDrawing] = useState(false)
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [mode, setMode] = useState<DrawMode>('line')
   const [draft, setDraft] = useState<[number, number][]>([])
   const [hover, setHover] = useState<[number, number] | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const editing = editingId ? zones.find((z) => z.id === editingId) ?? null : null
+  const drawing = phase === 'draw'
+  const pickingSide = phase === 'side'
 
-  // still surface state
-  const [imgError, setImgError] = useState(false)
+  // live surface state
+  const [mediaError, setMediaError] = useState(false)
   const [natAspect, setNatAspect] = useState<number | null>(null)
   const [snapTick, setSnapTick] = useState(0)
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // reset transient UI when the camera changes
   useEffect(() => {
-    setDrawing(false)
+    setPhase('idle')
     setDraft([])
     setHover(null)
     setEditingId(null)
-    setImgError(false)
+    setMediaError(false)
     setNatAspect(null)
   }, [cameraId])
+
+  // LIVE webcam preview (mirrored like the wall) — draw on what you SEE
+  useEffect(() => {
+    if (!isWebcam) return
+    let cancelled = false
+    getFaceStream()
+      .then((stream) => {
+        if (cancelled) return
+        const v = videoRef.current
+        if (v) {
+          v.srcObject = stream
+          void v.play().catch(() => undefined)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMediaError(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isWebcam, cameraId])
 
   // track the stage size so normalized <-> pixel math stays correct on resize
   useEffect(() => {
@@ -147,48 +175,53 @@ export default function Zones() {
     return () => ro.disconnect()
   }, [])
 
-  // refresh the still every few seconds (server cameras only)
+  // snapshot fallback refresh (server cameras whose live stream failed)
   useEffect(() => {
-    if (isWebcam) return
+    if (isWebcam || !mediaError) return
     const id = setInterval(() => setSnapTick((t) => t + 1), 4000)
     return () => clearInterval(id)
-  }, [isWebcam, cameraId])
+  }, [isWebcam, mediaError, cameraId])
 
-  // Escape cancels an in-progress draw
+  // keyboard: Escape cancels, Enter finishes
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && drawing) {
-        setDrawing(false)
+      if (e.key === 'Escape' && phase !== 'idle') {
+        setPhase('idle')
         setDraft([])
         setHover(null)
       }
+      if (e.key === 'Enter' && drawing) finishDraw()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [drawing])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, draft, mode])
 
-  // clear any pending click on unmount
   useEffect(() => () => {
     if (clickTimer.current) clearTimeout(clickTimer.current)
   }, [])
 
-  const effectiveAspect = isWebcam || imgError ? null : natAspect ?? 16 / 9
-  const imgRect = useMemo(() => containRect(size.w, size.h, effectiveAspect), [size, effectiveAspect])
+  const imgRect = useMemo(() => containRect(size.w, size.h, natAspect ?? 4 / 3), [size, natAspect])
 
   const isNightNow = (() => {
     const h = new Date().getHours()
     return h < 7 || h > 20
   })()
 
-  const clientToNorm = (clientX: number, clientY: number): [number, number] | null => {
+  /* ── coordinate mapping (mirror-aware for the webcam) ── */
+  const toNorm = (clientX: number, clientY: number): [number, number] | null => {
     const el = stageRef.current
     if (!el || imgRect.width <= 0 || imgRect.height <= 0) return null
     const r = el.getBoundingClientRect()
-    const nx = (clientX - r.left - imgRect.left) / imgRect.width
+    let nx = (clientX - r.left - imgRect.left) / imgRect.width
     const ny = (clientY - r.top - imgRect.top) / imgRect.height
+    if (isWebcam) nx = 1 - nx // display is mirrored — store unmirrored
     return [clamp01(nx), clamp01(ny)]
   }
-  const px = (p: readonly [number, number]): [number, number] => [p[0] * imgRect.width, p[1] * imgRect.height]
+  const px = (p: readonly [number, number]): [number, number] => {
+    const dx = isWebcam ? 1 - p[0] : p[0]
+    return [dx * imgRect.width, p[1] * imgRect.height]
+  }
   const ptsStr = (poly: readonly [number, number][]): string =>
     poly
       .map((p) => {
@@ -197,50 +230,91 @@ export default function Zones() {
       })
       .join(' ')
 
-  // ── actions ──
-  const startDraw = (): void => {
+  /* ── actions ── */
+  const startDraw = (m: DrawMode): void => {
     setEditingId(null)
     setDraft([])
     setHover(null)
-    setDrawing(true)
+    setMode(m)
+    setPhase('draw')
     uiClick()
   }
   const cancelDraw = (): void => {
-    setDrawing(false)
+    setPhase('idle')
     setDraft([])
     setHover(null)
   }
   const undoPoint = (): void => setDraft((d) => d.slice(0, -1))
-  const finishShape = (): void => {
-    if (draft.length < 3) return
+
+  const minPts = mode === 'line' ? 2 : 3
+
+  const finishDraw = (): void => {
+    if (draft.length < minPts) return
+    if (mode === 'line') {
+      // next click marks which side is the property
+      setPhase('side')
+      uiClick()
+      return
+    }
+    saveZone(draft.map((p) => [p[0], p[1]] as [number, number]), undefined, undefined)
+  }
+
+  const pickSide = (sidePoint: [number, number]): void => {
+    const line = draft.map((p) => [p[0], p[1]] as [number, number])
+    const poly = lineSidePolygon(line, sidePoint)
+    if (poly.length < 3) {
+      cancelDraw()
+      return
+    }
+    saveZone(poly, line, sidePoint)
+  }
+
+  const saveZone = (points: [number, number][], line?: [number, number][], sidePoint?: [number, number]): void => {
     const kind: Kind = 'PROPERTY'
     const zone: Zone = {
       id: genId(),
       cameraId,
-      name: `ZONE ${zones.length + 1}`,
+      name: line ? `BOUNDARY ${zones.filter((z) => z.line).length + 1}` : `ZONE ${zones.length + 1}`,
       kind,
-      points: draft.map((p) => [p[0], p[1]] as [number, number]),
+      points,
+      line,
+      sidePoint,
       alertOnEnter: true,
       nightOnly: false,
       color: KIND_COLOR[kind],
     }
     upsertZone(zone)
-    setDrawing(false)
+    setPhase('idle')
     setDraft([])
     setHover(null)
     setEditingId(zone.id)
     uiClick()
   }
+
   const patch = (z: Zone, part: Partial<Zone>): void => upsertZone({ ...z, ...part })
   const setKind = (z: Zone, kind: Kind): void =>
     patch(z, { kind, color: KIND_COLOR[kind], alertOnEnter: kind === 'IGNORE' ? false : z.alertOnEnter })
+  const flipSide = (z: Zone): void => {
+    if (!z.line) return
+    const { a, b } = lineBothPolygons(z.line)
+    if (a.length < 3 || b.length < 3) return
+    const current = z.sidePoint && pointInPolygon(z.sidePoint, a) ? a : b
+    const other = current === a ? b : a
+    const centroid = polygonCentroid(other)
+    patch(z, { points: other, sidePoint: centroid })
+    uiClick()
+  }
 
-  // ── stage pointer handlers ──
+  /* ── stage pointer handlers ── */
   const onStageClick = (e: MouseEvent<HTMLDivElement>): void => {
-    if (!drawing) return
-    const pt = clientToNorm(e.clientX, e.clientY)
+    const pt = toNorm(e.clientX, e.clientY)
     if (!pt) return
-    // defer so a double-click (close shape) doesn't also drop two stray points
+    if (pickingSide) {
+      pickSide(pt)
+      return
+    }
+    if (!drawing) return
+    // defer so a double-click (finish) doesn't also drop two stray points
     if (clickTimer.current) clearTimeout(clickTimer.current)
     clickTimer.current = setTimeout(() => {
       setDraft((d) => [...d, pt])
@@ -254,14 +328,20 @@ export default function Zones() {
       clearTimeout(clickTimer.current)
       clickTimer.current = null
     }
-    finishShape()
+    finishDraw()
   }
   const onStageMove = (e: MouseEvent<HTMLDivElement>): void => {
-    if (!drawing) return
-    setHover(clientToNorm(e.clientX, e.clientY))
+    if (!drawing && !pickingSide) return
+    setHover(toNorm(e.clientX, e.clientY))
   }
 
   const last = draft.length > 0 ? draft[draft.length - 1] : null
+  // live preview of the armed side while picking
+  const sidePreview = useMemo(() => {
+    if (!pickingSide || !hover || draft.length < 2) return null
+    const poly = lineSidePolygon(draft, hover)
+    return poly.length >= 3 ? poly : null
+  }, [pickingSide, hover, draft])
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 p-2">
@@ -271,7 +351,7 @@ export default function Zones() {
         <span className="lbl-faint">· {allZones.length} DEFINED</span>
         <ArmedBadge zones={allZones} />
         <div className="flex-1" />
-        <span className="lbl-faint">DRAW → NAME → ARM → WATCH</span>
+        <span className="lbl-faint">DRAW THE BOUNDARY → PICK YOUR SIDE → ARMED</span>
       </div>
 
       <div className="flex min-h-0 flex-1 gap-2">
@@ -309,15 +389,24 @@ export default function Zones() {
             <header className="flex h-6 shrink-0 items-center gap-2 border-b border-line px-2">
               <span className="led-pulse h-1.5 w-1.5 rounded-full" style={{ background: STATUS_COLOR[selectedCam?.status ?? 'offline'] }} />
               <span className="lbl truncate text-prim/80">{selectedCam?.name ?? '—'}</span>
-              <span className="lbl-faint">ZONE CANVAS</span>
+              <span className="lbl-faint">{mediaError ? 'STILL' : 'LIVE'} CANVAS</span>
               <div className="flex-1" />
-              {!drawing ? (
-                <button onClick={startDraw} className="lbl flex items-center gap-1 border border-accent/60 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20">
-                  + DRAW ZONE
-                </button>
+              {phase === 'idle' ? (
+                <>
+                  <button onClick={() => startDraw('line')} className="lbl flex items-center gap-1 border border-accent/60 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20">
+                    + BOUNDARY LINE
+                  </button>
+                  <button onClick={() => startDraw('area')} className="lbl flex items-center gap-1 border border-line px-2 py-0.5 text-dim hover:border-lineb hover:text-prim">
+                    + AREA
+                  </button>
+                </>
+              ) : pickingSide ? (
+                <span className="lbl flex items-center gap-1 text-amber">
+                  <span className="led-pulse h-1.5 w-1.5 rounded-full bg-amber" /> CLICK YOUR PROPERTY SIDE
+                </span>
               ) : (
                 <span className="lbl flex items-center gap-1 text-accent">
-                  <span className="led-pulse h-1.5 w-1.5 rounded-full bg-accent" /> DRAWING · {draft.length} PTS
+                  <span className="led-pulse h-1.5 w-1.5 rounded-full bg-accent" /> {mode === 'line' ? 'BOUNDARY' : 'AREA'} · {draft.length} PTS
                 </span>
               )}
             </header>
@@ -326,30 +415,55 @@ export default function Zones() {
             <div
               ref={stageRef}
               className="relative min-h-0 flex-1 overflow-hidden bg-black"
-              style={{ cursor: drawing ? 'crosshair' : 'default' }}
+              style={{ cursor: drawing || pickingSide ? 'crosshair' : 'default' }}
               onClick={onStageClick}
               onDoubleClick={onStageDbl}
               onMouseMove={onStageMove}
               onMouseLeave={() => setHover(null)}
             >
-              {/* background still */}
+              {/* LIVE background — video (webcam) or MJPEG stream (bridged) */}
               {isWebcam ? (
-                <WebcamPlaceholder />
-              ) : imgError ? (
-                <SnapshotUnavailable name={selectedCam?.name ?? cameraId} />
-              ) : (
+                mediaError ? (
+                  <MediaUnavailable label="WEBCAM UNAVAILABLE" />
+                ) : (
+                  <video
+                    ref={videoRef}
+                    muted
+                    playsInline
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget
+                      if (v.videoWidth > 0) setNatAspect(v.videoWidth / v.videoHeight)
+                    }}
+                    className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+                )
+              ) : mediaError ? (
                 <img
-                  key={cameraId}
+                  key={`snap-${cameraId}-${snapTick}`}
                   src={`${cameraSnapshotUrl(API_ORIGIN, cameraId)}?t=${snapTick}`}
                   alt={selectedCam?.name ?? cameraId}
                   className="pointer-events-none absolute inset-0 h-full w-full object-contain"
                   draggable={false}
                   onLoad={(e) => {
                     const el = e.currentTarget
-                    if (el.naturalWidth > 0 && el.naturalHeight > 0) setNatAspect(el.naturalWidth / el.naturalHeight)
-                    setImgError(false)
+                    if (el.naturalWidth > 0) setNatAspect(el.naturalWidth / el.naturalHeight)
                   }}
-                  onError={() => setImgError(true)}
+                  onError={() => setNatAspect(null)}
+                />
+              ) : (
+                <img
+                  key={`live-${cameraId}`}
+                  src={cameraStreamUrl(API_ORIGIN, cameraId)}
+                  alt={selectedCam?.name ?? cameraId}
+                  crossOrigin="anonymous"
+                  className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                  draggable={false}
+                  onLoad={(e) => {
+                    const el = e.currentTarget
+                    if (el.naturalWidth > 0) setNatAspect(el.naturalWidth / el.naturalHeight)
+                  }}
+                  onError={() => setMediaError(true)}
                 />
               )}
 
@@ -367,14 +481,26 @@ export default function Zones() {
                       <polygon
                         points={ptsStr(z.points)}
                         fill={z.color}
-                        fillOpacity={sel ? 0.2 : 0.12}
+                        fillOpacity={sel ? 0.16 : 0.09}
                         stroke={z.color}
-                        strokeOpacity={0.95}
+                        strokeOpacity={z.line ? 0.35 : 0.95}
                         strokeWidth={sel ? 2 : 1.25}
                         strokeLinejoin="round"
+                        strokeDasharray={z.line ? '3 4' : undefined}
                       />
+                      {z.line && (
+                        <polyline
+                          points={ptsStr(z.line)}
+                          fill="none"
+                          stroke={z.color}
+                          strokeOpacity={0.95}
+                          strokeWidth={sel ? 3 : 2.25}
+                          strokeLinejoin="round"
+                          strokeLinecap="round"
+                        />
+                      )}
                       {sel &&
-                        z.points.map((p, i) => {
+                        (z.line ?? z.points).map((p, i) => {
                           const q = px(p)
                           return <circle key={i} cx={q[0]} cy={q[1]} r={3} fill={z.color} />
                         })}
@@ -382,15 +508,28 @@ export default function Zones() {
                   )
                 })}
 
+                {/* side-pick preview: tint the side the cursor is on */}
+                {sidePreview && (
+                  <polygon points={ptsStr(sidePreview)} fill={DRAW_ACCENT} fillOpacity={0.12} stroke={DRAW_ACCENT} strokeOpacity={0.3} strokeWidth={1} strokeDasharray="3 4" />
+                )}
+
                 {/* in-progress draft */}
                 {draft.length > 0 && (
                   <g>
-                    {draft.length >= 3 && <polygon points={ptsStr(draft)} fill={DRAW_ACCENT} fillOpacity={0.08} stroke="none" />}
-                    <polyline points={ptsStr(draft)} fill="none" stroke={DRAW_ACCENT} strokeOpacity={0.95} strokeWidth={1.5} strokeLinejoin="round" />
-                    {hover && last && (
+                    {mode === 'area' && draft.length >= 3 && <polygon points={ptsStr(draft)} fill={DRAW_ACCENT} fillOpacity={0.08} stroke="none" />}
+                    <polyline
+                      points={ptsStr(draft)}
+                      fill="none"
+                      stroke={DRAW_ACCENT}
+                      strokeOpacity={0.95}
+                      strokeWidth={mode === 'line' ? 2.5 : 1.5}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                    {drawing && hover && last && (
                       <>
                         <line x1={px(last)[0]} y1={px(last)[1]} x2={px(hover)[0]} y2={px(hover)[1]} stroke={DRAW_ACCENT} strokeOpacity={0.6} strokeWidth={1} strokeDasharray="4 3" />
-                        {draft.length >= 2 && (
+                        {mode === 'area' && draft.length >= 2 && (
                           <line x1={px(hover)[0]} y1={px(hover)[1]} x2={px(draft[0])[0]} y2={px(draft[0])[1]} stroke={DRAW_ACCENT} strokeOpacity={0.28} strokeWidth={1} strokeDasharray="2 3" />
                         )}
                       </>
@@ -407,17 +546,18 @@ export default function Zones() {
               {/* zone labels (HTML, above the vector) */}
               {imgRect.width > 0 &&
                 zones.map((z) => {
-                  const c = polygonCentroid(z.points)
-                  const left = imgRect.left + c[0] * imgRect.width
-                  const top = imgRect.top + c[1] * imgRect.height
+                  const c = z.line && z.line.length > 0 ? z.line[Math.floor(z.line.length / 2)] : polygonCentroid(z.points)
+                  const disp = px(c)
+                  const left = imgRect.left + disp[0]
+                  const top = imgRect.top + disp[1]
                   return (
-                    <div key={z.id} className={`absolute -translate-x-1/2 -translate-y-1/2 ${drawing ? 'pointer-events-none' : ''}`} style={{ left, top }}>
+                    <div key={z.id} className={`absolute -translate-x-1/2 -translate-y-1/2 ${phase !== 'idle' ? 'pointer-events-none' : ''}`} style={{ left, top }}>
                       <div className="flex items-center gap-1 border bg-void/80 px-1.5 py-0.5" style={{ borderColor: z.color }}>
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
                             setEditingId(z.id)
-                            setDrawing(false)
+                            setPhase('idle')
                             uiClick()
                           }}
                           className="flex items-center gap-1"
@@ -451,52 +591,66 @@ export default function Zones() {
                 })}
 
               {/* empty state */}
-              {!drawing && zones.length === 0 && (
+              {phase === 'idle' && zones.length === 0 && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div className="relative px-8 py-6 text-center">
+                  <div className="relative bg-void/55 px-8 py-6 text-center">
                     <CornerBrackets size={10} />
-                    <div className="font-grotesk text-[16px] tracking-[0.25em] text-faint">NO ZONES ON THIS CAMERA</div>
+                    <div className="font-grotesk text-[16px] tracking-[0.25em] text-prim/70">NO ZONES ON THIS CAMERA</div>
                     <div className="lbl-faint mt-2 leading-5">
-                      CLICK <span className="text-accent">+ DRAW ZONE</span> AND OUTLINE YOUR
+                      CLICK <span className="text-accent">+ BOUNDARY LINE</span> AND TRACE YOUR PROPERTY BORDER
                       <br />
-                      PROPERTY · ENTRY · DRIVEWAY — THEN ARM IT
+                      ON THE LIVE IMAGE — THEN CLICK WHICH SIDE IS YOURS
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* drawing control bar */}
-              {drawing && (
+              {/* drawing / side-pick control bar */}
+              {phase !== 'idle' && (
                 <div
                   className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1.5 border border-lineb bg-panel2/90 px-2 py-1 shadow-glow"
                   onClick={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => e.stopPropagation()}
                 >
-                  <span className="lbl-faint">CLICK TO ADD · DBL-CLICK TO CLOSE</span>
-                  <span className="h-3 w-px bg-line" />
-                  <button onClick={undoPoint} disabled={draft.length === 0} className="lbl border border-line px-1.5 py-0.5 text-dim hover:border-lineb hover:text-prim disabled:opacity-40">
-                    UNDO
-                  </button>
-                  <button onClick={finishShape} disabled={draft.length < 3} className="lbl border border-accent bg-accent/10 px-1.5 py-0.5 text-accent hover:bg-accent/20 disabled:opacity-40">
-                    CLOSE SHAPE
-                  </button>
-                  <button onClick={cancelDraw} className="lbl border border-line px-1.5 py-0.5 text-dim hover:border-red hover:text-red">
-                    CANCEL
-                  </button>
+                  {pickingSide ? (
+                    <>
+                      <span className="lbl text-amber">CLICK THE SIDE THAT IS YOUR PROPERTY</span>
+                      <span className="h-3 w-px bg-line" />
+                      <button onClick={cancelDraw} className="lbl border border-line px-1.5 py-0.5 text-dim hover:border-red hover:text-red">
+                        CANCEL
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="lbl-faint">
+                        {mode === 'line' ? 'CLICK ALONG THE BORDER · DBL-CLICK / ENTER TO FINISH' : 'CLICK TO ADD · DBL-CLICK TO CLOSE'}
+                      </span>
+                      <span className="h-3 w-px bg-line" />
+                      <button onClick={undoPoint} disabled={draft.length === 0} className="lbl border border-line px-1.5 py-0.5 text-dim hover:border-lineb hover:text-prim disabled:opacity-40">
+                        UNDO
+                      </button>
+                      <button onClick={finishDraw} disabled={draft.length < minPts} className="lbl border border-accent bg-accent/10 px-1.5 py-0.5 text-accent hover:bg-accent/20 disabled:opacity-40">
+                        {mode === 'line' ? 'FINISH LINE' : 'CLOSE SHAPE'}
+                      </button>
+                      <button onClick={cancelDraw} className="lbl border border-line px-1.5 py-0.5 text-dim hover:border-red hover:text-red">
+                        CANCEL
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
               {/* HUD */}
               <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1">
                 <span className="led-pulse h-1.5 w-1.5 rounded-full bg-accent" />
-                <span className="num text-[9px] text-accent/80">ZONES</span>
+                <span className="num text-[9px] text-accent/80">ZONES · {mediaError ? 'STILL' : 'LIVE'}</span>
               </div>
             </div>
           </section>
 
           {/* honesty / help line */}
           <div className="lbl-faint shrink-0 px-1">
-            ZONES WATCH ONLY YOUR OWN PROPERTY · A PERSON ENTERING AN ARMED ZONE RAISES A LOCAL ALERT · ALL PROCESSING ON-DEVICE
+            DRAW ON THE LIVE IMAGE · A BOUNDARY LINE ARMS ONE SIDE (YOURS) · ALERTS &amp; RECORDINGS STAY ON-DEVICE
           </div>
         </div>
 
@@ -504,22 +658,23 @@ export default function Zones() {
         <aside className="flex w-[320px] shrink-0 flex-col gap-2">
           <section className="panel-surface relative flex shrink-0 flex-col">
             <header className="flex h-6 shrink-0 items-center gap-2 border-b border-line px-2">
-              <span className="lbl flex-1 text-prim/80">{drawing ? 'DRAWING ZONE' : 'ZONE EDITOR'}</span>
-              {editing && !drawing && (
+              <span className="lbl flex-1 text-prim/80">{phase !== 'idle' ? 'DRAWING' : 'ZONE EDITOR'}</span>
+              {editing && phase === 'idle' && (
                 <span className="lbl-faint" style={{ color: editing.color }}>
-                  {editing.kind}
+                  {editing.line ? 'BOUNDARY' : editing.kind}
                 </span>
               )}
             </header>
             <div className="p-2">
-              {drawing ? (
-                <DrawingPanel count={draft.length} onClose={finishShape} onUndo={undoPoint} onCancel={cancelDraw} />
+              {phase !== 'idle' ? (
+                <DrawingPanel mode={mode} phase={phase} count={draft.length} minPts={minPts} onFinish={finishDraw} onUndo={undoPoint} onCancel={cancelDraw} />
               ) : editing ? (
                 <EditorPanel
                   zone={editing}
                   night={isNightNow}
                   onPatch={patch}
                   onSetKind={setKind}
+                  onFlipSide={() => flipSide(editing)}
                   onDelete={() => {
                     removeZone(editing.id)
                     setEditingId(null)
@@ -529,12 +684,12 @@ export default function Zones() {
               ) : (
                 <div className="py-4 text-center">
                   <div className="lbl-faint leading-5">
-                    SELECT A ZONE FROM THE LIST
+                    TRACE YOUR PROPERTY BORDER AS A LINE
                     <br />
-                    OR DRAW A NEW ONE
+                    OR SELECT A ZONE FROM THE LIST
                   </div>
-                  <button onClick={startDraw} className="lbl mt-3 border border-accent/60 bg-accent/10 px-3 py-1 text-accent hover:bg-accent/20">
-                    + DRAW ZONE
+                  <button onClick={() => startDraw('line')} className="lbl mt-3 border border-accent/60 bg-accent/10 px-3 py-1 text-accent hover:bg-accent/20">
+                    + BOUNDARY LINE
                   </button>
                 </div>
               )}
@@ -560,7 +715,7 @@ export default function Zones() {
                         key={z.id}
                         onClick={() => {
                           setEditingId(z.id)
-                          setDrawing(false)
+                          setPhase('idle')
                         }}
                         className={`flex cursor-pointer items-center gap-2 border-b border-line/50 px-2 py-1.5 ${sel ? 'bg-panel2' : 'hover:bg-panel2/60'}`}
                       >
@@ -568,7 +723,7 @@ export default function Zones() {
                         <div className="min-w-0 flex-1">
                           <div className="lbl truncate text-prim/85">{z.name}</div>
                           <div className="lbl-faint">
-                            {z.kind} · {z.points.length} PTS
+                            {z.line ? `BOUNDARY LINE · ${z.line.length} PTS` : `${z.kind} · ${z.points.length} PTS`}
                           </div>
                         </div>
                         {z.nightOnly && (
@@ -616,34 +771,46 @@ function ArmedBadge({ zones }: { zones: Zone[] }): ReactNode {
   )
 }
 
-function WebcamPlaceholder(): ReactNode {
-  return (
-    <div
-      className="absolute inset-0 bg-void"
-      style={{
-        backgroundImage:
-          'linear-gradient(rgba(34,211,238,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.05) 1px, transparent 1px)',
-        backgroundSize: '28px 28px',
-      }}
-    >
-      <div className="pointer-events-none absolute left-0 right-0 top-2 flex justify-center">
-        <span className="lbl-faint border border-line bg-panel2/70 px-2 py-0.5">OPERATOR CAM · NO SERVER SNAPSHOT · DRAW ON REFERENCE CANVAS</span>
-      </div>
-    </div>
-  )
-}
-
-function SnapshotUnavailable({ name }: { name: string }): ReactNode {
+function MediaUnavailable({ label }: { label: string }): ReactNode {
   return (
     <div className="absolute inset-0 bg-void">
       <div className="pointer-events-none absolute left-0 right-0 top-2 flex justify-center px-4">
-        <span className="lbl-faint max-w-full truncate border border-amber/40 bg-panel2/70 px-2 py-0.5 text-amber">SNAPSHOT UNAVAILABLE · {name} · DRAW ON REFERENCE CANVAS</span>
+        <span className="lbl-faint max-w-full truncate border border-amber/40 bg-panel2/70 px-2 py-0.5 text-amber">{label} · DRAWING STILL WORKS ON THE BLANK CANVAS</span>
       </div>
     </div>
   )
 }
 
-function DrawingPanel({ count, onClose, onUndo, onCancel }: { count: number; onClose: () => void; onUndo: () => void; onCancel: () => void }): ReactNode {
+function DrawingPanel({
+  mode,
+  phase,
+  count,
+  minPts,
+  onFinish,
+  onUndo,
+  onCancel,
+}: {
+  mode: DrawMode
+  phase: Phase
+  count: number
+  minPts: number
+  onFinish: () => void
+  onUndo: () => void
+  onCancel: () => void
+}): ReactNode {
+  if (phase === 'side') {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="lbl text-amber">STEP 2 · PICK YOUR SIDE</div>
+        <div className="lbl-faint leading-5">
+          CLICK THE SIDE OF THE LINE THAT IS <span className="text-prim">YOUR PROPERTY</span>. THAT SIDE BECOMES THE ARMED REGION — HOVER TO PREVIEW IT.
+        </div>
+        <button onClick={onCancel} className="lbl border border-line px-2 py-1 text-dim hover:border-red hover:text-red">
+          CANCEL
+        </button>
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -651,14 +818,22 @@ function DrawingPanel({ count, onClose, onUndo, onCancel }: { count: number; onC
         <span className="num text-[16px] text-accent">{count}</span>
       </div>
       <div className="lbl-faint leading-5">
-        CLICK ON THE STILL TO DROP POLYGON POINTS. DOUBLE-CLICK OR <span className="text-accent">CLOSE SHAPE</span> TO FINISH (MIN 3).
+        {mode === 'line' ? (
+          <>
+            TRACE YOUR PROPERTY BORDER ON THE LIVE IMAGE — ANY SHAPE, JUST A LINE. DOUBLE-CLICK, ENTER OR <span className="text-accent">FINISH LINE</span> WHEN DONE (MIN {minPts}). YOU PICK YOUR SIDE NEXT.
+          </>
+        ) : (
+          <>
+            CLICK TO DROP POLYGON POINTS. DOUBLE-CLICK OR <span className="text-accent">CLOSE SHAPE</span> TO FINISH (MIN {minPts}).
+          </>
+        )}
       </div>
       <div className="flex gap-1.5">
         <button onClick={onUndo} disabled={count === 0} className="lbl flex-1 border border-line px-2 py-1 text-dim hover:border-lineb hover:text-prim disabled:opacity-40">
           UNDO PT
         </button>
-        <button onClick={onClose} disabled={count < 3} className="lbl flex-1 border border-accent bg-accent/10 px-2 py-1 text-accent hover:bg-accent/20 disabled:opacity-40">
-          CLOSE SHAPE
+        <button onClick={onFinish} disabled={count < minPts} className="lbl flex-1 border border-accent bg-accent/10 px-2 py-1 text-accent hover:bg-accent/20 disabled:opacity-40">
+          {mode === 'line' ? 'FINISH LINE' : 'CLOSE SHAPE'}
         </button>
       </div>
       <button onClick={onCancel} className="lbl border border-line px-2 py-1 text-dim hover:border-red hover:text-red">
@@ -673,12 +848,14 @@ function EditorPanel({
   night,
   onPatch,
   onSetKind,
+  onFlipSide,
   onDelete,
 }: {
   zone: Zone
   night: boolean
   onPatch: (z: Zone, part: Partial<Zone>) => void
   onSetKind: (z: Zone, kind: Kind) => void
+  onFlipSide: () => void
   onDelete: () => void
 }): ReactNode {
   return (
@@ -694,25 +871,38 @@ function EditorPanel({
         />
       </label>
 
-      <div>
-        <span className="lbl-faint">KIND</span>
-        <div className="mt-1 flex flex-wrap gap-1">
-          {KINDS.map((k) => {
-            const on = zone.kind === k
-            return (
-              <button
-                key={k}
-                onClick={() => onSetKind(zone, k)}
-                className="lbl border px-1.5 py-0.5 transition-colors"
-                style={{ borderColor: on ? KIND_COLOR[k] : 'var(--line)', color: on ? KIND_COLOR[k] : 'var(--text-dim)', background: on ? `${KIND_COLOR[k]}1a` : 'transparent' }}
-              >
-                {k}
-              </button>
-            )
-          })}
+      {zone.line ? (
+        <div className="border border-accent/25 bg-accent/5 px-2 py-1.5">
+          <div className="flex items-center justify-between">
+            <span className="lbl text-accent/90">BOUNDARY LINE</span>
+            <span className="lbl-faint">{zone.line.length} PTS</span>
+          </div>
+          <div className="lbl-faint mt-1 leading-4">THE TINTED SIDE IS ARMED — YOUR PROPERTY.</div>
+          <button onClick={onFlipSide} className="lbl mt-1.5 w-full border border-accent/50 bg-accent/10 px-2 py-1 text-accent hover:bg-accent/20">
+            ⇄ FLIP ARMED SIDE
+          </button>
         </div>
-        <div className="lbl-faint mt-1 opacity-70">{KIND_HINT[zone.kind]}</div>
-      </div>
+      ) : (
+        <div>
+          <span className="lbl-faint">KIND</span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {KINDS.map((k) => {
+              const on = zone.kind === k
+              return (
+                <button
+                  key={k}
+                  onClick={() => onSetKind(zone, k)}
+                  className="lbl border px-1.5 py-0.5 transition-colors"
+                  style={{ borderColor: on ? KIND_COLOR[k] : 'var(--line)', color: on ? KIND_COLOR[k] : 'var(--text-dim)', background: on ? `${KIND_COLOR[k]}1a` : 'transparent' }}
+                >
+                  {k}
+                </button>
+              )
+            })}
+          </div>
+          <div className="lbl-faint mt-1 opacity-70">{KIND_HINT[zone.kind]}</div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <ToggleRow label="ALERT ON ENTER" on={zone.alertOnEnter} onLabel="ARMED" offLabel="DISARMED" color="var(--accent-green)" onToggle={() => onPatch(zone, { alertOnEnter: !zone.alertOnEnter })} />
