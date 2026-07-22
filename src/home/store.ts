@@ -162,6 +162,10 @@ export interface HomeStore {
   lastFace: FaceReadout | null
   /** smart-brain snapshot — presence, activities, occupancy, insights */
   brain: BrainSnapshot | null
+  /** camera ids currently auto-recording (event capture) */
+  recordingCams: string[]
+  /** bumped whenever a clip is saved/deleted — subscribe key for lists */
+  clipsVersion: number
   eventsVersion: number
   homeStatus: HomeStatus
   detectionsPerMin: number
@@ -188,6 +192,8 @@ export interface HomeStore {
   reportCv(online: boolean, perMin: number): void
   reportFace(r: FaceReadout | null): void
   reportBrain(b: BrainSnapshot | null): void
+  setRecording(cameraId: string, on: boolean): void
+  bumpClips(): void
   emit(severity: HomeSeverity, kind: HomeEventKind, message: string, opts?: { cameraId?: string; personId?: string; snapshot?: string }): void
   /** all tiles: webcam first, then server cameras */
   tiles(): Tile[]
@@ -216,6 +222,8 @@ export const useHome = create<HomeStore>((set, get) => {
     zones: loadZones(),
     lastFace: null,
     brain: null,
+    recordingCams: [],
+    clipsVersion: 0,
     eventsVersion: 0,
     homeStatus: 'SECURE',
     detectionsPerMin: 0,
@@ -290,6 +298,13 @@ export const useHome = create<HomeStore>((set, get) => {
     reportCv: (online, perMin) => set({ cvOnline: online, detectionsPerMin: perMin }),
     reportFace: (r) => set({ lastFace: r }),
     reportBrain: (b) => set({ brain: b }),
+    setRecording: (cameraId, on) =>
+      set((s) => {
+        const has = s.recordingCams.includes(cameraId)
+        if (on === has) return s
+        return { recordingCams: on ? [...s.recordingCams, cameraId] : s.recordingCams.filter((c) => c !== cameraId) }
+      }),
+    bumpClips: () => set((s) => ({ clipsVersion: s.clipsVersion + 1 })),
     emit,
 
     tiles: () => {

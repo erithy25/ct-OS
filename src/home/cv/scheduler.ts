@@ -63,6 +63,11 @@ const CLASS_SEV: Record<DetClass, 'INFO' | 'NOTICE'> = {
   other: 'INFO',
 }
 
+/** Whether some component currently feeds this camera's frames to detection. */
+export function hasSource(cameraId: string): boolean {
+  return sources.has(cameraId)
+}
+
 export function registerSource(cameraId: string, getter: SourceGetter): () => void {
   sources.set(cameraId, getter)
   if (!order.includes(cameraId)) order.push(cameraId)

@@ -14,8 +14,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Panel from '../../components/Panel'
 import CornerBrackets from '../../components/CornerBrackets'
 import { getHomeEvents, useHome } from '../store'
-import type { HomeEvent, HomeSeverity, HomeStatus } from '../types'
+import type { ClipMeta, HomeEvent, HomeSeverity, HomeStatus } from '../types'
 import { fmtLocal } from '../../lib/format'
+import { deleteClip, getClipBlob, listClips } from '../record/clipStore'
+import { uiClick } from '../../lib/audio'
 
 /* ── palette ───────────────────────────────────────────────────────── */
 
@@ -158,12 +160,181 @@ export default function Alerts() {
         </Panel>
 
         <div className="flex min-h-0 w-[320px] shrink-0 flex-col gap-2">
+          <RecordingsPanel />
           <Panel title="ALERT RULES" className="min-h-0 flex-1" bodyClassName="overflow-y-auto" right={<span className="lbl-faint">READ-ONLY</span>}>
             <RulesSummary now={now} />
           </Panel>
           <Panel title="NOTIFICATIONS" brackets className="shrink-0" bodyClassName="p-2">
             <Notifications supported={notifySupported} perm={perm} setPerm={setPerm} />
           </Panel>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── recordings (auto-captured clips, local only) ──────────────────── */
+
+function fmtDur(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
+}
+const fmtSize = (b: number): string => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`)
+
+function RecordingsPanel() {
+  const clipsVersion = useHome((s) => s.clipsVersion)
+  const recordingCams = useHome((s) => s.recordingCams)
+  const [clips, setClips] = useState<ClipMeta[]>([])
+  const [open, setOpen] = useState<{ meta: ClipMeta; url: string } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void listClips().then((c) => {
+      if (!cancelled) setClips(c)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [clipsVersion])
+
+  // object URLs must be revoked when the player closes/unmounts
+  useEffect(() => {
+    return () => {
+      if (open) URL.revokeObjectURL(open.url)
+    }
+  }, [open])
+
+  const play = async (meta: ClipMeta) => {
+    uiClick()
+    const blob = await getClipBlob(meta.id)
+    if (!blob) return
+    setOpen((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url)
+      return { meta, url: URL.createObjectURL(blob) }
+    })
+  }
+
+  const del = async (meta: ClipMeta) => {
+    uiClick()
+    await deleteClip(meta.id)
+    if (open?.meta.id === meta.id) setOpen(null)
+    useHome.getState().bumpClips()
+  }
+
+  const live = recordingCams.length > 0
+
+  return (
+    <>
+      <Panel
+        title="RECORDINGS"
+        live={live}
+        ledColor={live ? 'var(--accent-red)' : undefined}
+        className="min-h-0 max-h-[46%] shrink-0"
+        bodyClassName="min-h-0 overflow-y-auto"
+        right={
+          live ? (
+            <span className="lbl flex items-center gap-1 text-red">
+              <span className="led-pulse h-1 w-1 rounded-full bg-red" /> RECORDING
+            </span>
+          ) : (
+            <span className="lbl-faint">{clips.length} SAVED · LOCAL</span>
+          )
+        }
+      >
+        {clips.length === 0 ? (
+          <div className="flex flex-col items-center gap-1 px-3 py-5 text-center">
+            <span className="lbl text-faint">NO RECORDINGS YET</span>
+            <span className="lbl-faint leading-4">
+              AUTO-CAPTURE STARTS WHEN AN UNKNOWN PERSON IS SEEN AND STOPS WHEN THE SCENE CLEARS
+            </span>
+          </div>
+        ) : (
+          <ul className="flex flex-col">
+            {clips.map((c) => (
+              <li key={c.id} className="flex items-center gap-1.5 border-b border-line/50 px-1.5 py-1">
+                <button onClick={() => void play(c)} className="group relative h-9 w-14 shrink-0 overflow-hidden border border-line bg-black" title="PLAY">
+                  {c.thumb ? (
+                    <img src={c.thumb} alt="" className="h-full w-full object-cover opacity-80 group-hover:opacity-100" draggable={false} />
+                  ) : (
+                    <span className="flex h-full items-center justify-center text-[10px] text-faint">▶</span>
+                  )}
+                  <span className="absolute inset-0 flex items-center justify-center text-[11px] text-white opacity-0 transition-opacity group-hover:opacity-100">▶</span>
+                </button>
+                <button onClick={() => void play(c)} className="min-w-0 flex-1 text-left">
+                  <div className="flex items-center gap-1">
+                    <span className="lbl truncate text-red">{c.trigger}</span>
+                    <span className="lbl-faint shrink-0">· {c.cameraId}</span>
+                  </div>
+                  <div className="num lbl-faint truncate">
+                    {fmtLocal(new Date(c.startedAt))} · {fmtDur(c.durMs)} · {fmtSize(c.size)}
+                  </div>
+                </button>
+                <button onClick={() => void del(c)} className="lbl-faint shrink-0 px-1 hover:text-red" title="DELETE CLIP">
+                  🗙
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      {open && <ClipPlayer meta={open.meta} url={open.url} onDelete={() => void del(open.meta)} onClose={() => setOpen(null)} />}
+    </>
+  )
+}
+
+function ClipPlayer({ meta, url, onDelete, onClose }: { meta: ClipMeta; url: string; onDelete: () => void; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  const ext = meta.mime.includes('mp4') ? 'mp4' : 'webm'
+  const stamp = new Date(meta.startedAt)
+  const p = (n: number) => String(n).padStart(2, '0')
+  const fname = `homewatch-${stamp.getFullYear()}${p(stamp.getMonth() + 1)}${p(stamp.getDate())}-${p(stamp.getHours())}${p(stamp.getMinutes())}${p(stamp.getSeconds())}-${meta.cameraId}.${ext}`
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/85 p-6" onClick={onClose}>
+      <div className="panel-surface-2 relative flex max-h-full w-[860px] max-w-[94%] flex-col border-lineb shadow-glow" onClick={(e) => e.stopPropagation()}>
+        <CornerBrackets />
+        <div className="flex h-7 shrink-0 items-center gap-2 border-b border-line px-2.5">
+          <span className="led-pulse h-1.5 w-1.5 rounded-full bg-red" />
+          <span className="lbl text-red">{meta.trigger}</span>
+          <span className="lbl text-dim">{meta.cameraName}</span>
+          <span className="num lbl-faint">
+            {fmtLocal(new Date(meta.startedAt))} · {fmtDur(meta.durMs)} · {fmtSize(meta.size)}
+          </span>
+          <div className="flex-1" />
+          <span className="lbl-faint">ESC TO CLOSE</span>
+        </div>
+        <div className="min-h-0 flex-1 bg-black">
+          {/* controls + autoplay — the clip IS the point of this modal */}
+          <video src={url} controls autoPlay className="max-h-[62vh] w-full object-contain" />
+        </div>
+        <div className="flex shrink-0 items-center gap-2 border-t border-line px-2.5 py-2">
+          <a
+            href={url}
+            download={fname}
+            className="lbl border border-accent/60 bg-accent/10 px-3 py-1.5 text-accent transition-colors hover:bg-accent/20"
+          >
+            ⬇ DOWNLOAD
+          </a>
+          <button onClick={onDelete} className="lbl border border-red/50 px-3 py-1.5 text-red transition-colors hover:bg-red/10">
+            DELETE CLIP
+          </button>
+          <div className="flex-1" />
+          <span className="lbl-faint">STORED LOCALLY IN THIS BROWSER · NEVER UPLOADED</span>
+          <button onClick={onClose} className="lbl border border-line px-3 py-1.5 text-dim hover:border-lineb hover:text-prim">
+            CLOSE
+          </button>
         </div>
       </div>
     </div>
@@ -317,6 +488,12 @@ function RulesSummary({ now }: { now: number }) {
       tone: feedsDown > 0 ? 'TRIGGERED' : 'CLEAR',
       label: feedsDown > 0 ? `${feedsDown} DOWN` : 'CLEAR',
       detail: `${liveCams}/${totalCams} FEEDS LIVE`,
+    },
+    {
+      name: 'AUTO-RECORD ON UNKNOWN',
+      tone: cvOnline ? 'ARMED' : 'STANDBY',
+      label: cvOnline ? 'ARMED' : 'STANDBY',
+      detail: 'RECORDS WHILE AN UNKNOWN PERSON IS IN VIEW · STOPS WHEN CLEAR · SAVED LOCALLY',
     },
   ]
 

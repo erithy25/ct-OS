@@ -101,6 +101,7 @@ function ServerBadge({ online, ffmpeg }: { online: boolean; ffmpeg?: boolean }) 
 function TileFrame({ tile, expanded = false, onExpand, onCollapse }: { tile: Tile; expanded?: boolean; onExpand?: () => void; onCollapse?: () => void }) {
   const removeCamera = useHome((s) => s.removeCamera)
   const select = useHome((s) => s.select)
+  const recording = useHome((s) => s.recordingCams.includes(tile.info.id))
   const info = tile.info
   const color = STATUS_COLOR[info.status]
   const mediaRef = useRef<HTMLVideoElement | HTMLImageElement | null>(null) as MutableRefObject<HTMLVideoElement | HTMLImageElement | null>
@@ -143,11 +144,13 @@ function TileFrame({ tile, expanded = false, onExpand, onCollapse }: { tile: Til
           <ServerFeed info={info} mediaRef={mediaRef} />
         )}
         {live && <DetectionOverlay cameraId={info.id} mediaRef={mediaRef} mirror={tile.isWebcam} />}
-        {/* HUD */}
-        <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1">
-          <span className="h-1.5 w-1.5 rounded-full bg-red led-pulse" />
-          <span className="num text-[9px] text-red">REC</span>
-        </div>
+        {/* HUD — honest: ⏺ REC only while the event recorder actually records */}
+        {recording && (
+          <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 border border-red/60 bg-void/60 px-1.5 py-0.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-red led-pulse" style={{ boxShadow: '0 0 6px var(--accent-red)' }} />
+            <span className="num text-[9px] tracking-wide text-red">REC · AUTO-CAPTURE</span>
+          </div>
+        )}
         <Clock />
       </div>
     </section>

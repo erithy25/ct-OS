@@ -202,6 +202,31 @@ export interface BrainSnapshot {
   insights: string[]
 }
 
+/* ── event recordings (auto-capture) ───────────────────────────────── */
+
+/**
+ * Metadata of one automatically captured clip. The video itself is a Blob in
+ * IndexedDB (browser-local, deletable) — never uploaded anywhere. Recording
+ * arms ONLY while a trigger holds (unknown person in view / WARN situation)
+ * and stops shortly after the scene clears.
+ */
+export interface ClipMeta {
+  id: string
+  cameraId: string
+  cameraName: string
+  /** what armed the recording, e.g. 'UNKNOWN PERSON' */
+  trigger: string
+  startedAt: number
+  endedAt: number
+  durMs: number
+  /** container mime actually produced by MediaRecorder */
+  mime: string
+  /** bytes */
+  size: number
+  /** small jpeg data-url grabbed at start (may be absent) */
+  thumb?: string
+}
+
 /** A drawn region on a camera view (property boundary / entry / driveway…). */
 export interface Zone {
   id: string

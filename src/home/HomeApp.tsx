@@ -5,6 +5,7 @@ import { startDetection } from './cv/scheduler'
 import { startZoneWatch } from './zones/zoneWatch'
 import { startFaceWatch } from './people/faceWatch'
 import { startBrain } from './activity/brain'
+import { startRecorder } from './record/recorder'
 import type { HomeView } from './types'
 import { HomeIntel, HomeLeftRail, HomeTicker, HomeTopBar } from './shell/HomeShell'
 import HomeBoot from './HomeBoot'
@@ -49,6 +50,7 @@ export default function HomeApp() {
     startZoneWatch()
     startFaceWatch()
     startBrain()
+    startRecorder()
   }, [])
 
   useEffect(() => {

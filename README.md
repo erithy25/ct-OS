@@ -90,6 +90,12 @@ with velocity prediction (no visible lag): **green** with `NAME · ROLE` for enr
 household/guests, **red** `UNKNOWN` for unrecognized people, neutral cyan while identity is
 still resolving.
 
+**Auto-capture:** the moment an unknown person is in view (or a WARN-grade vehicle
+situation is active), the affected camera starts recording — and stops shortly after the
+scene clears. Clips live in the browser's IndexedDB (never uploaded), listed under
+ALERTS → RECORDINGS with playback, download and delete. The tile shows an honest
+`⏺ REC · AUTO-CAPTURE` badge only while actually recording.
+
 Keyboard: `1–6` switch modules · `⌘K` command (add/remove/goto) · `Esc` closes overlays.
 Append `?boot=skip` to skip the boot sequence, `?api=http://host:port` to point at a
 non-default server.
